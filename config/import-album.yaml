@@ -1,0 +1,12 @@
+# Импорт папки как альбома. Отличие от одиночного — quiet_fallback: skip:
+# если папка на альбом не похожа, не заводим её криво, а пропускаем, и
+# nightly.sh тут же пробует те же файлы поштучно.
+threaded: no
+import:
+    quiet: yes
+    quiet_fallback: skip
+    move: yes
+    copy: no
+    incremental: no
+    duplicate_action: skip
+    write: yes

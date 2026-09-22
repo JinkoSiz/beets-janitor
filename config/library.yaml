@@ -1,0 +1,12 @@
+# Лёгкий конфиг: им скрипты открывают библиотеку, чтобы не тянуть плагины и
+# сеть ради чтения базы. Сюда же смотрит library_scan из nightly.sh, когда
+# заводит в базу папку, появившуюся в фонотеке в обход incoming.
+threaded: no
+import:
+    quiet: yes
+    quiet_fallback: asis
+    move: no
+    copy: no
+    incremental: yes
+    duplicate_action: skip
+    write: yes

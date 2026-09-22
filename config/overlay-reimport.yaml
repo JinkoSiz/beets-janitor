@@ -1,0 +1,4 @@
+# Разовый повтор импорта: отключает incremental, чтобы beets не пропустил
+# папки, которые уже видел. Наложение: beet -c config.yaml -c overlay-reimport.yaml
+import:
+    incremental: no

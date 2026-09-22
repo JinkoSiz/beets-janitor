@@ -1,0 +1,47 @@
+# Рабочий пример. Скопировать в docker-compose.yml, поправить пути слева
+# от двоеточия и заполнить .env.
+#
+# Образ берём готовый — linuxserver/beets: в нём уже лежат beets, ffmpeg и
+# fpcalc из chromaprint. Своего Dockerfile нет специально: набор — это
+# скрипты, а не форк beets, и собирать ради них образ незачем.
+#
+# Штатный entrypoint образа поднимает веб-интерфейс; нам он не нужен, поэтому
+# entrypoint подменён на сторожа. Сторож сам раскладывает конфиги из шаблонов
+# и дальше крутится в цикле: импортирует появившееся в incoming и раз в сутки
+# прогоняет библиотеку через цепочку починки.
+
+services:
+  beets:
+    image: lscr.io/linuxserver/beets:latest
+    container_name: beets
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", "python3 /app/scripts/render-config.py && exec /bin/sh /app/scripts/nightly.sh"]
+    env_file: .env
+    environment:
+      TZ: Europe/Moscow
+      # beets ищет конфиг по BEETSDIR — скрипты зовут просто `beet`
+      BEETSDIR: /config
+      # sitecustomize.py подхватывается интерпретатором только через PYTHONPATH:
+      # он придерживает темп обращений к Spotify и кэширует ответы
+      PYTHONPATH: /app/scripts
+      # в образе linuxserver fpcalc лежит здесь
+      FPCALC: /usr/bin/fpcalc
+      # права на файлы фонотеки после работы; убрать, если не нужно
+      OWNER: "1000:1000"
+    volumes:
+      # сам набор скриптов: репозиторий целиком, только на чтение
+      - ./:/app:ro
+      # конфиги, база beets, журналы и логи
+      - ./data/config:/config
+      # фонотека
+      - /srv/media/music:/music
+      # куда падают новые файлы
+      - /srv/media/incoming:/incoming
+      # карантин: убранные копии и битые файлы
+      - /srv/media/residue:/residue
+
+# Если ходите в интернет через прокси (MusicBrainz и Spotify бывают недоступны
+# напрямую), добавьте в environment:
+#   HTTP_PROXY: http://proxy:1081
+#   HTTPS_PROXY: http://proxy:1081
+#   NO_PROXY: localhost,127.0.0.1

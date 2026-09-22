@@ -1,0 +1,35 @@
+# Ключи и всё, что разворачивается из шаблонов
+.env
+config/config.yaml
+config.yaml
+
+# База beets и её резервные копии — это фонотека конкретного человека
+*.db
+*.db-*
+*.blb
+*.blb-*
+state.pickle
+
+# Журналы, отчёты и служебные отметки работы
+*.log
+*.log.dry
+*.jsonl
+*.journal
+net.log
+nightly/
+.retried*
+.spotify-*
+.last-lib-scan
+.incoming-state
+
+# Промежуточные версии скриптов и разовые выгрузки
+*.bak
+*.bak-*
+*.bak[0-9]*
+*-paths.txt
+*.orig
+*.rej
+
+__pycache__/
+*.py[cod]
+.cache/

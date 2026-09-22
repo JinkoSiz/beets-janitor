@@ -1,0 +1,4 @@
+# Руками, с вопросами: снимает quiet и разрешает завести вторую копию.
+import:
+    quiet: no
+    duplicate_action: keep

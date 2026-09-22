@@ -1,0 +1,74 @@
+# Основной конфиг beets: им работает импорт и ручные команды `beet`.
+#
+# Это шаблон. Значения ${...} подставляются из окружения командой
+#     python3 scripts/render-config.py
+# которая кладёт готовые файлы в $CONFIG_DIR. Так ключи остаются в окружении,
+# а не в файле, который легко закоммитить по ошибке.
+
+directory: ${MUSIC_DIR}
+library: ${CONFIG_DIR}/library.db
+
+import:
+    write: yes
+    copy: no
+    move: no
+    resume: yes
+    incremental: yes
+    quiet: yes
+    # если совпадения нет — заводим как есть, а не бросаем файл;
+    # потом retry.py вернётся к таким дорожкам и попробует ещё раз
+    quiet_fallback: asis
+    # skip, а не keep: keep заводит вторую копию в базе на каждый повторный
+    # импорт, и библиотека обрастает дублями сама собой
+    duplicate_action: skip
+    log: ${CONFIG_DIR}/import.log
+
+musicbrainz:
+    # источник не должен штрафоваться за то, что он не MusicBrainz:
+    # иначе Spotify и Deezer никогда не выигрывают у пустого совпадения
+    data_source_mismatch_penalty: 0.0
+    searchlimit: 5
+
+match:
+    # это ПОРОГИ РАССТОЯНИЯ, а не сходства: меньше — значит строже
+    strong_rec_thresh: 0.15
+    medium_rec_thresh: 0.25
+    # rec_gap_thresh только ПОНИЖАЕТ рекомендацию, когда два кандидата
+    # близки друг к другу; поднять ею оценку нельзя
+    rec_gap_thresh: 0.25
+    max_rec:
+        # потолок рекомендации независимо от расстояния: релиз с лишними
+        # или недостающими дорожками не считаем точным попаданием
+        missing_tracks: medium
+        unmatched_tracks: medium
+
+plugins: musicbrainz deezer spotify chroma embedart fetchart scrub duplicates lyrics
+
+fetchart:
+    auto: yes
+
+embedart:
+    auto: yes
+
+lyrics:
+    auto: yes
+    sources: lrclib
+
+scrub:
+    auto: yes
+
+duplicates:
+    keys: mb_trackid
+    full: no
+
+chroma:
+    data_source_mismatch_penalty: 0.0
+    auto: yes
+
+deezer:
+    data_source_mismatch_penalty: 0.0
+
+spotify:
+    client_id: ${SPOTIFY_CLIENT_ID}
+    client_secret: ${SPOTIFY_CLIENT_SECRET}
+    data_source_mismatch_penalty: 0.0

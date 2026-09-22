@@ -1,0 +1,11 @@
+# Импорт одиночных файлов из incoming: файл переезжает в фонотеку, совпадения
+# нет — заводим как есть (retry.py вернётся к нему ночью).
+threaded: no
+import:
+    quiet: yes
+    quiet_fallback: asis
+    move: yes
+    copy: no
+    incremental: no
+    duplicate_action: skip
+    write: yes
