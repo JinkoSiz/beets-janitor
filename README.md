@@ -1,103 +1,108 @@
-# Ночная починка фонотеки для beets
+# Nightly library repair for beets
 
-Набор скриптов, который держит библиотеку [beets](https://beets.io) в порядке
-без ручного разбора: импортирует новое, добивает неопознанное, сводит
-разъехавшиеся альбомы, убирает копии и достаёт обложки. Работает поверх
-обычного beets — это не форк и не патч, beets остаётся стоковым.
+A set of scripts that keeps a [beets](https://beets.io) library in order
+without manual triage: imports what arrives, retries what came in
+unidentified, reassembles albums that fell apart, removes duplicates and
+fetches the artwork beets won't fetch on its own.
 
-Писалось под живую библиотеку в 8000+ дорожек, которая собиралась годами из
-разных источников и успела обрасти всеми возможными видами беспорядка.
+It runs *alongside* stock beets — not a fork, not a patch. beets stays
+untouched.
 
-## Зачем это, если есть сам beets
+Written against a live 8,000-track library that had been assembled over years
+from mismatched sources and had accumulated every kind of mess a music library
+can accumulate.
 
-beets отлично раскладывает то, что приходит с нормальными тегами. Проблемы
-начинаются дальше, и штатных ответов на них нет:
+## Why, when beets already exists
 
-| Что видно в плеере | Отчего так | Чем лечится |
+beets is excellent at filing music that arrives with decent tags. The trouble
+starts after that, and for most of it there is no built-in answer:
+
+| What you see in the player | Why it happens | What fixes it |
 |---|---|---|
-| Альбом распался на 5 карточек по одной дорожке | у релиза пустой `albumartist`, и плеер берёт исполнителя дорожки | `normalize.py` |
-| Один альбом показан дважды-трижды | в библиотеке два издания, у каждого свой объект | `consolidate.py` |
-| Внутри альбома трек лежит по два раза | копии пришли из разных источников и получили разные идентификаторы | `dedup.py`, `consolidate.py` |
-| «Disc 0» и «Disc 1» у обычного альбома | часть дорожек без номера диска, часть с единицей | `consolidate.py` |
-| Кусок сборника уехал в Various Artists | совместные треки помечены иначе, чем сольные | `normalize.py`, `consolidate.py` |
-| У одиночных треков пустой квадрат вместо обложки | `fetchart` обслуживает только альбомы, до синглтонов не доходит вовсе | `covers.py` |
-| Теги вида `Ìîÿ øëþõà` | файл сохранён в cp1251, прочитан как latin-1 | `fixenc.py` |
-| Трек годами лежит «как есть», без тегов | при импорте не хватило доли процента до порога совпадения | `retry.py` |
-| Альбом собран, но называется по-разному у разных дорожек | часть дорожек сматчилась к сингловому релизу | `albumgroup.py` |
+| One album split into five single-track entries | the release has an empty `albumartist`, so the player falls back to the track artist | `normalize.py` |
+| The same album listed two or three times | two pressings in the library, each with its own album object | `consolidate.py` |
+| A track appears twice inside one album | copies came from different sources and got different IDs | `dedup.py`, `consolidate.py` |
+| "Disc 0" and "Disc 1" on a single-disc album | some tracks carry no disc number, others carry 1 | `consolidate.py` |
+| Part of a compilation drifts into Various Artists | collaborations are tagged differently from solo tracks | `normalize.py`, `consolidate.py` |
+| Empty square instead of cover art on singletons | `fetchart` only serves albums — it never reaches standalone tracks | `covers.py` |
+| Tags that read `Ìîÿ øëþõà` | file written in cp1251, read back as latin-1 | `fixenc.py` |
+| A track sits untagged for years | the import fell a fraction short of the match threshold | `retry.py` |
+| An album is assembled but its tracks disagree on its name | some tracks matched a single release instead of the album | `albumgroup.py` |
 
-## Как устроено
+## How it works
 
-Один сторож (`nightly.sh`) крутится в цикле:
+A single watcher (`nightly.sh`) runs in a loop:
 
-* видит новые файлы в `incoming` → чинит кодировку тегов → импортирует
-  (сначала пробует папку как альбом, не вышло — поштучно);
-* раз в сутки после `NIGHTLY_HOUR` прогоняет библиотеку целиком:
+* new files land in `incoming` → tag encoding is repaired → they are imported
+  (a folder is tried as an album first, then file by file);
+* once a day after `NIGHTLY_HOUR` the whole library goes through the chain:
 
 ```
-library_scan     завести в базу то, что появилось в фонотеке мимо incoming
-fixenc.py        кодировка тегов
-beet update -M   перечитать теги с диска
-fixnames.py      имена файлов по шаблону
-retry.py         добить дорожки, лежащие «как есть»
-normalize.py     имена исполнителей: склейки, регистр, гомоглифы
-albumgroup.py    собрать развалившиеся альбомы по встроенной обложке
-dedup.py         убрать копии, подтверждённые отпечатком
-consolidate.py   один альбом — один экземпляр
-covers.py        обложки
-cleanup_residue  чистка карантина
+library_scan     pick up folders that appeared in the library bypassing incoming
+fixenc.py        tag encoding
+beet update -M   re-read tags from disk
+fixnames.py      filenames to the beets template
+retry.py         retry tracks that were filed as-is
+normalize.py     artist names: collapsed credits, casing, homoglyphs
+albumgroup.py    reassemble broken-up albums by embedded cover art
+dedup.py         drop duplicates confirmed by acoustic fingerprint
+consolidate.py   one album, one copy
+covers.py        artwork
+cleanup_residue  prune the quarantine
 ```
 
-Порядок не случайный. Кодировка чинится **до** импорта: иначе beets ищет
-совпадение по абракадабре и трек гарантированно ложится «как есть».
-Нормализация идёт до сборки альбомов, сборка — до дедупа, дедуп — до сведения
-изданий: каждый следующий шаг опирается на то, что предыдущий уже привёл
-теги в порядок.
+The order is deliberate. Encoding is fixed **before** import: otherwise beets
+searches for a match against mojibake and the track is guaranteed to land
+as-is. Normalisation runs before album reassembly, reassembly before dedup,
+dedup before merging pressings — each step relies on the previous one having
+already settled the tags.
 
-## Чем это безопасно
+## Why it is safe to run
 
-Скрипты трогают фонотеку, поэтому:
+These scripts touch your library, so:
 
-* **Сухой прогон.** Почти все понимают `--dry`: печатают, что сделали бы, и
-  не пишут ничего. Начинать стоит с него.
-* **Карантин вместо удаления.** Ничего не удаляется. Копии уезжают в
-  `RESIDUE_DIR/_dupes`, нечитаемые файлы — в `_broken`, и лежат там
-  `DUPES_DAYS` (по умолчанию две недели). Вернуть — `unquarantine.py`.
-* **Журналы.** Каждая правка тегов и каждое перемещение пишутся строкой JSON
-  в `applied.jsonl` и `consolidate.journal`: видно, что было до и что стало,
-  и можно откатить руками.
-* **Отпечаток решает, а не название.** Прежде чем признать две дорожки
-  копиями, скрипты сверяют акустический отпечаток через `fpcalc`. Названия и
-  длительности врут: «Scary Movies (Yonderboi remix)» и «Scary Movies (Future
-  Type Joint remix)» отличаются одной скобкой, а одна и та же запись
-  расходится на секунды из-за кодирования.
-* **Сомнение — в пользу сохранения.** Если отпечаток не снялся или сходство
-  в серой зоне, файл остаётся на месте и попадает в отчёт.
+* **Dry runs.** Almost every script takes `--dry`: it prints what it would do
+  and writes nothing. Start there.
+* **Quarantine instead of deletion.** Nothing is deleted. Duplicates move to
+  `RESIDUE_DIR/_dupes`, unreadable files to `_broken`, and they stay there for
+  `DUPES_DAYS` (two weeks by default). `unquarantine.py` brings them back.
+* **Journals.** Every tag edit and every file move is appended as a JSON line
+  to `applied.jsonl` and `consolidate.journal` — before and after, so you can
+  reverse any of it by hand.
+* **Fingerprints decide, not filenames.** Before calling two tracks copies,
+  the scripts compare acoustic fingerprints via `fpcalc`. Titles and durations
+  lie: "Scary Movies (Yonderboi remix)" and "Scary Movies (Future Type Joint
+  remix)" differ by one parenthesis, while one and the same recording drifts
+  by seconds between encodings.
+* **Doubt favours keeping.** If a fingerprint can't be taken, or similarity
+  lands in the grey zone, the file stays where it is and goes into the report.
 
-## Установка
+## Install
 
-Нужен Docker и образ с beets, ffmpeg и `fpcalc` — подойдёт
-`lscr.io/linuxserver/beets`.
+You need Docker and an image with beets, ffmpeg and `fpcalc` from chromaprint
+— `lscr.io/linuxserver/beets` will do.
 
 ```bash
-git clone <адрес-репозитория> beets-nightly
+git clone <repository-url> beets-nightly
 cd beets-nightly
 cp .env.example .env
-$EDITOR .env                       # вписать ключи Spotify
+$EDITOR .env                       # fill in the Spotify keys
 cp docker-compose.example.yml docker-compose.yml
-$EDITOR docker-compose.yml         # поправить пути к фонотеке
+$EDITOR docker-compose.yml         # point the volumes at your library
 docker compose up -d
 docker compose logs -f
 ```
 
-При первом запуске конфиги разворачиваются из `config/*.template` в
-`CONFIG_DIR` с подстановкой окружения. Готовые файлы потом не перезаписываются
-— правки руками сохраняются; принудительно: `render-config.py --force`.
+On first start the configs are expanded from `config/*.template` into
+`CONFIG_DIR` with the environment substituted in. Files that already exist are
+left alone, so hand edits survive restarts; to overwrite them anyway, run
+`render-config.py --force`.
 
-Ключи Spotify берутся на
+Spotify credentials come from
 [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) →
-Create app. Без них плагин молча ничего не находит.
+Create app. Without them the plugin silently finds nothing.
 
-### Без Docker
+### Without Docker
 
 ```bash
 export MUSIC_DIR=/srv/music INCOMING_DIR=/srv/incoming \
@@ -107,90 +112,97 @@ python3 scripts/render-config.py
 sh scripts/nightly.sh
 ```
 
-Отдельный скрипт можно запустить и руками — сначала с `--dry`:
+Individual scripts can be run by hand — with `--dry` first:
 
 ```bash
 python3 scripts/consolidate.py --dry
 ```
 
-## Настройка
+## Configuration
 
-Все переменные необязательны, кроме ключей Spotify; значения по умолчанию
-совпадают с раскладкой образа linuxserver.
+Everything except the Spotify keys is optional; the defaults match the
+linuxserver image layout.
 
-| Переменная | По умолчанию | Что делает |
+| Variable | Default | Meaning |
 |---|---|---|
-| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | — | ключи Spotify |
-| `MUSIC_DIR` | `/music` | фонотека |
-| `INCOMING_DIR` | `/incoming` | куда падают новые файлы |
-| `RESIDUE_DIR` | `/residue` | карантин |
-| `CONFIG_DIR` | `/config` | конфиги, база, журналы |
-| `BEETSDIR` | `= CONFIG_DIR` | где beets ищет свой конфиг |
-| `LOOSE_DIRS` | `Non-Album,TelegramMusic,_Unofficial,_Unmatched` | папки-свалки (см. ниже) |
-| `INTERVAL` | `300` | как часто проверять `incoming`, секунд |
-| `NIGHTLY_HOUR` | `5` | с какого часа пытаться начать ночную работу |
-| `JUNK_DAYS` / `DUPES_DAYS` | `3` / `14` | сколько хранить в карантине |
-| `TMO_ALBUM` / `TMO_SINGLE` | `900` / `300` | потолок времени на импорт |
-| `SPOTIFY_DAILY` | `2500` | дневной потолок запросов |
-| `OWNER` | пусто | `chown` фонотеки после работы, вида `1000:1000` |
-| `SPOOL_DIR` | пусто | если задать — сюда лягут сводки для уведомлялки |
-| `FPCALC` | `fpcalc` | путь к `fpcalc`, если он не в `PATH` |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | — | Spotify credentials |
+| `MUSIC_DIR` | `/music` | the library |
+| `INCOMING_DIR` | `/incoming` | where new files land |
+| `RESIDUE_DIR` | `/residue` | quarantine |
+| `CONFIG_DIR` | `/config` | configs, database, journals |
+| `BEETSDIR` | `= CONFIG_DIR` | where beets looks for its own config |
+| `LOOSE_DIRS` | `Non-Album,TelegramMusic,_Unofficial,_Unmatched` | dump folders (see below) |
+| `INTERVAL` | `300` | how often to check `incoming`, seconds |
+| `NIGHTLY_HOUR` | `5` | earliest hour to start the nightly run |
+| `JUNK_DAYS` / `DUPES_DAYS` | `3` / `14` | quarantine retention |
+| `TMO_ALBUM` / `TMO_SINGLE` | `900` / `300` | import timeouts, seconds |
+| `SPOTIFY_DAILY` | `2500` | daily request ceiling |
+| `OWNER` | empty | `chown` the library afterwards, e.g. `1000:1000` |
+| `SPOOL_DIR` | empty | if set, nightly summaries are dropped here |
+| `FPCALC` | `fpcalc` | path to `fpcalc` if it isn't on `PATH` |
 
-**`LOOSE_DIRS`** — папки, где лежат одиночные файлы, а не собранные альбомы.
-Разница принципиальна для дедупа: лишнюю копию из свалки убрать можно, а
-выдёргивать дорожку из полного издания нельзя — останется покалеченный релиз.
+**`LOOSE_DIRS`** are folders holding standalone files rather than assembled
+albums. The distinction matters to the dedup: a spare copy sitting in a dump
+folder can be removed, but pulling a track out of a complete pressing cannot —
+that would leave a crippled release behind.
 
-## Что внутри
+## What's inside
 
-| Файл | Что делает |
+| File | What it does |
 |---|---|
-| `nightly.sh` | сторож и ночная цепочка |
-| `env.py` | единственное место, где живут пути и настройки |
-| `render-config.py` | разворачивает конфиги из шаблонов, подставляя окружение |
-| `fixenc.py` | чинит кодировку тегов (cp1251, прочитанный как latin-1) |
-| `fixnames.py` | приводит имена файлов к шаблону beets |
-| `retry.py` | добивает дорожки, лежащие «как есть» |
-| `normalize.py` | имена исполнителей: склейки, регистр, гомоглифы, пустой `albumartist` |
-| `albumgroup.py` | собирает развалившиеся альбомы по встроенной обложке |
-| `dedup.py` | убирает копии в два прохода, с проверкой отпечатком |
-| `consolidate.py` | один альбом — один экземпляр: издания, диски, обломки сборников |
-| `covers.py` | обложки одиночным трекам и альбомам, которых не осилил `fetchart` |
-| `unquarantine.py` | возвращает из карантина то, что убрали зря |
-| `sitecustomize.py` | придерживает темп обращений к Spotify, кэширует ответы, ставит предохранитель |
+| `nightly.sh` | the watcher and the nightly chain |
+| `env.py` | the one place where paths and settings live |
+| `render-config.py` | expands configs from templates, substituting the environment |
+| `fixenc.py` | repairs tag encoding (cp1251 read as latin-1) |
+| `fixnames.py` | brings filenames in line with the beets template |
+| `retry.py` | retries tracks that were filed as-is |
+| `normalize.py` | artist names: collapsed credits, casing, homoglyphs, empty `albumartist` |
+| `albumgroup.py` | reassembles broken-up albums by embedded cover art |
+| `dedup.py` | removes duplicates in two passes, confirmed by fingerprint |
+| `consolidate.py` | one album, one copy: pressings, discs, compilation fragments |
+| `covers.py` | artwork for singletons and for albums `fetchart` gave up on |
+| `unquarantine.py` | restores anything quarantined by mistake |
+| `sitecustomize.py` | paces Spotify requests, caches responses, trips a breaker |
 
-### Про `sitecustomize.py`
+### About `sitecustomize.py`
 
-Подхватывается интерпретатором сам, если папка со скриптами есть в
-`PYTHONPATH`. Оборачивает сетевые вызовы: держит дневной бюджет запросов к
-Spotify, замедляется при первых признаках ограничения, кэширует ответы в
-SQLite и отключает источник на несколько часов после череды отказов. Без него
-большая библиотека упирается в 429 на первой же ночи.
+Python picks this up on its own as long as the scripts directory is on
+`PYTHONPATH`. It wraps outbound calls: keeps a daily Spotify request budget,
+slows down at the first sign of throttling, caches responses in SQLite and
+takes the source offline for a few hours after a run of failures. Without it a
+large library walks straight into HTTP 429 on its first night.
 
-## Чего это не делает
+## What it does not do
 
-* Не качает музыку. На вход — то, что вы положили в `incoming`.
-* Не правит то, в чём не уверено. Спорные случаи попадают в отчёт, а не
-  под правку.
-* Не заменяет beets и не патчит его. Ставится рядом, beets остаётся стоковым.
-* Не проверяет, что внутри файла та самая запись. Если источник подсунул
-  чужой звук с правильными тегами, скрипты этого не заметят — они сверяют
-  копии между собой, а не с эталоном.
+* It does not download music. Whatever you put in `incoming` is the input.
+* It does not edit what it isn't sure about. Ambiguous cases go into the
+  report, not under the knife.
+* It does not replace or patch beets. It sits next to it; beets stays stock.
+* It does not verify that a file contains the recording its tags claim. If a
+  source handed you the wrong audio with the right tags, these scripts won't
+  notice — they compare copies against each other, not against a reference.
 
-## Замеченное по дороге
+## Things worth knowing about beets
 
-Две вещи в beets, на которые стоит обратить внимание, если будете копать
-сами:
+Two or three findings from building this, in case you go digging yourself:
 
-* `strong_rec_thresh` и `medium_rec_thresh` — это пороги **расстояния**, а не
-  сходства: меньше значит строже. А `rec_gap_thresh` умеет только **понижать**
-  рекомендацию, когда два кандидата близки друг к другу; поднять ею оценку
-  нельзя. Отсюда типичная ошибка «покрутил пороги, а ничего не изменилось».
-* `max_rec` ограничивает рекомендацию независимо от расстояния. При
-  `missing_tracks: medium` релиз с недостающими дорожками не станет точным
-  совпадением, даже если совпал идеально во всём остальном.
-* `fetchart` обслуживает только альбомы. У одиночной дорожки обложка не
-  появится никогда, сколько ни сканируй, — ради этого и написан `covers.py`.
+* `strong_rec_thresh` and `medium_rec_thresh` are **distance** thresholds, not
+  similarity: lower means stricter. And `rec_gap_thresh` can only **lower** a
+  recommendation, when two candidates sit close together — it can never raise
+  one. Hence the classic "I tuned the thresholds and nothing changed".
+* `max_rec` caps the recommendation regardless of distance. With
+  `missing_tracks: medium`, a release with missing tracks will never be a
+  strong match, however perfectly everything else lines up.
+* `fetchart` only serves albums. A standalone track will never get artwork, no
+  matter how often you rescan — which is what `covers.py` exists for.
 
-## Лицензия
+## A note on language
 
-MIT, как и у самого beets.
+The README is in English; the comments in the code are in Russian. They
+explain *why* each decision was made rather than what a line does, which is
+where most of the value sits — translating them is on the list, but a machine
+pass would cost more than it gives.
+
+## License
+
+MIT, same as beets itself.
