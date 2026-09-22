@@ -1,0 +1,9 @@
+# Скрипты исполняются в Linux-контейнере. Если при клоне на Windows git
+# подставит CRLF, shell споткнётся о возврат каретки в shebang, а python
+# получит "\r" в конце строк. Поэтому переводы строк фиксируем.
+* text=auto eol=lf
+*.sh  text eol=lf
+*.py  text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md  text eol=lf
