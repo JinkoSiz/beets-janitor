@@ -83,8 +83,8 @@ You need Docker and an image with beets, ffmpeg and `fpcalc` from chromaprint
 — `lscr.io/linuxserver/beets` will do.
 
 ```bash
-git clone <repository-url> beets-nightly
-cd beets-nightly
+git clone https://github.com/JinkoSiz/beets-janitor.git
+cd beets-janitor
 cp .env.example .env
 $EDITOR .env                       # fill in the Spotify keys
 cp docker-compose.example.yml docker-compose.yml
