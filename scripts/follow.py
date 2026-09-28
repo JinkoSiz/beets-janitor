@@ -20,6 +20,7 @@ follow_min_tracks дорожек, — плюс добавленные в пул�
 дискография. Недостающее из старого — это страница «Дискография».
 
   follow.py [--dry] [--artist ИМЯ]
+  follow.py --arrivals     только отметить скачанные релизы, доехавшие до фонотеки
 """
 import datetime
 import json
@@ -188,6 +189,12 @@ def main():
     if "--artist" in sys.argv:
         only = sys.argv[sys.argv.index("--artist") + 1]
     con = jdb.connect()
+    if "--arrivals" in sys.argv:
+        # только отметить доехавшее: сторож зовёт это сразу после разбора
+        # incoming, чтобы скачанный релиз не висел «качается» до ночи
+        arrived = recheck_downloads(con, disco.Library())
+        print("доехало до фонотеки релизов: %d" % arrived)
+        return
     if jdb.setting(con, "follow_enabled") != "1" and not only:
         print("слежение выключено в настройках")
         return

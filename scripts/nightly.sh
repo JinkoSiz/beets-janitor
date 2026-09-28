@@ -338,6 +338,10 @@ while true; do
       if [ -f "$SCRIPTS"/verify.py ]; then
         step verify 1800 python3 "$SCRIPTS"/verify.py --new
       fi
+      # скачанное через пульт доехало — релиз сразу «в фонотеке», а не утром
+      if [ -f "$SCRIPTS"/follow.py ]; then
+        step arrivals 600 python3 "$SCRIPTS"/follow.py --arrivals
+      fi
       [ -n "$RUN_ID" ] && jdb run-finish "$RUN_ID" ok
       unset JANITOR_RUN_ID
       echo "=== $(date '+%F %T') incoming done"
