@@ -14,9 +14,9 @@ RUN pip install --no-cache-dir -r panel/requirements.txt
 COPY scripts scripts
 COPY panel panel
 
-# htmx кладём в образ, а не тянем с CDN при каждом открытии пульта
-RUN curl -fsSL -o panel/pult/static/pult/htmx.min.js https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js \
- && cd panel && DJANGO_COLLECTING=1 python manage.py collectstatic --noinput -v 0
+# htmx 2.0.4 лежит в репозитории (panel/pult/static/pult/htmx.min.js): сборка
+# не зависит от CDN — с домашнего сервера unpkg отвечает через раз
+RUN cd panel && DJANGO_COLLECTING=1 python manage.py collectstatic --noinput -v 0
 
 ENV SCRIPTS_DIR=/app/scripts PYTHONUNBUFFERED=1
 WORKDIR /app/panel
