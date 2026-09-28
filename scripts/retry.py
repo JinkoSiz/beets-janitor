@@ -189,8 +189,25 @@ def open_library():
                            bconf["directory"].as_filename())
 
 
+def below_reason(c, d, it):
+    """Человеческое объяснение, почему кандидат не прошёл, — для пульта."""
+    if d > SOFT_MAX:
+        return "расстояние %.3f при пороге %.2f" % (d, SOFT_MAX)
+    extra = sorted(set(c.distance.keys()) - SOFT_PENALTIES)
+    if extra:
+        return "мешает: %s" % ", ".join(extra)
+    if c.info.length is None or not it.length:
+        return "у кандидата не указана длина"
+    return "длина разошлась на %d с" % abs(float(c.info.length) - float(it.length))
+
+
 def judge(it):
-    """Оценить лучшего кандидата. Вернуть (совпадение, причина) или (None, None)."""
+    """Оценить лучшего кандидата.
+
+    Вернуть (кандидат, как принят, почему отклонён). Кандидат возвращается и
+    тогда, когда не прошёл: пульт показывает его в очереди «Как есть», и
+    принять его можно одной кнопкой.
+    """
     from beets.autotag import match as amatch
     from beets.autotag.match import Recommendation
     try:
@@ -199,7 +216,7 @@ def judge(it):
         print("   !! ошибка поиска: %s" % str(e)[:90])
         return None, None, None
     if not prop.candidates:
-        return None, None, None
+        return None, None, "ни одного кандидата ни в одном каталоге"
     c = prop.candidates[0]
     d = float(c.distance.distance)
     strong = prop.recommendation == Recommendation.strong
@@ -209,7 +226,7 @@ def judge(it):
             and it.length
             and abs(float(c.info.length) - float(it.length)) <= LEN_TOL)
     if not (strong or soft):
-        return None, None, None
+        return c, None, below_reason(c, d, it)
     # проверку на чужого исполнителя применяем и к strong: beets там опирается
     # на одну дистанцию, а она на типовых названиях бывает обманчиво низкой
     if not artist_ok(it.artist, c.info.artist):
@@ -230,7 +247,40 @@ def snapshot(it):
     return {f: it.get(f) for f in SNAP_FIELDS}
 
 
-def apply_match(c, it, why, journal):
+_con = None
+
+
+def db():
+    global _con
+    if _con is None:
+        import janitordb
+        _con = janitordb.connect()
+    return _con
+
+
+def cand_info(c):
+    """Что пульт покажет о кандидате и чем потом его применит."""
+    i = c.info
+    return {"artist": str(i.artist), "title": str(i.title), "album": str(getattr(i, "album", "") or ""),
+            "length": round(float(i.length), 1) if i.length else None,
+            "source": str(getattr(i, "data_source", "") or ""),
+            "track_id": str(getattr(i, "track_id", "") or ""),
+            "distance": round(float(c.distance.distance), 3)}
+
+
+def ask_asis(it, c, bad):
+    """Трек остался «как есть» — вопрос в пульт: принять кандидата или нет."""
+    if DRY:
+        return
+    import janitordb
+    path = it.path.decode("utf-8", "replace")
+    payload = {"path": path, "item_id": it.id, "artist": str(it.artist), "title": str(it.title),
+               "album": str(it.album), "length": round(float(it.length or 0), 1),
+               "why": bad, "candidate": cand_info(c) if c is not None else None}
+    janitordb.ask(db(), "asis", "asis:" + path, "%s — %s" % (it.artist, it.title), payload)
+
+
+def apply_match(c, it, why, journal=None):
     d = float(c.distance.distance)
     before = snapshot(it)
     print("   + %.3f [%s] %s - %s  ->  %s - %s (%s)"
@@ -242,16 +292,15 @@ def apply_match(c, it, why, journal):
     c.apply_metadata()
     it.store()
     it.try_write()
-    if journal:
-        journal.write(json.dumps({
-            "date": datetime.date.today().isoformat(),
-            "path": it.path.decode("utf-8", "replace"),
-            "d": round(d, 3),
-            "why": why,
-            "before": before,
-            "after": snapshot(it),
-        }, ensure_ascii=False, default=str) + "\n")
-        journal.flush()
+    import janitordb
+    after = snapshot(it)
+    after.update({"distance": round(d, 3), "why": why})
+    janitordb.log_event(db(), "retry", "match", before, after, item_id=it.id,
+                        path=it.path.decode("utf-8", "replace"))
+    # если трек стоял в очереди «Как есть» — вопрос снят: он сматчился сам
+    db().execute("UPDATE reviews SET status='resolved', decision='matched', decided_at=? "
+                 "WHERE key=? AND status='open'",
+                 (janitordb.now(), "asis:" + it.path.decode("utf-8", "replace")))
 
 
 def main():
@@ -315,20 +364,14 @@ def main():
         done += 1
         used += 5
 
-    journal = None
-    if not DRY:
-        try:
-            journal = open(JOURNAL, "a")
-        except Exception:
-            journal = None
-
+    asked = 0
     for it, path in singles:
         if used >= budget:
             print("-- бюджет на сегодня исчерпан, остальное завтра")
             break
         c, why, bad = judge(it)
         if c is not None and why:
-            apply_match(c, it, why, journal)
+            apply_match(c, it, why)
             matched += 1
         else:
             if c is not None:
@@ -338,17 +381,23 @@ def main():
                       % (bad, str(it.artist)[:18], str(it.title)[:22],
                          str(c.info.artist)[:22], str(c.info.title)[:22]))
                 rejected += 1
+            if bad and not spotify_blocked():
+                ask_asis(it, c, bad)
+                asked += 1
             if spotify_blocked():
                 skipped_blocked += 1
             attempt(path)
         done += 1
         used += 1
 
-    if journal:
-        journal.close()
-    print("обработано: %d, сматчено: %d, отклонено по имени: %d "
+    print("обработано: %d, сматчено: %d, отклонено: %d, в очередь «как есть»: %d "
           "(без Spotify, попытка не засчитана: %d)"
-          % (done, matched, rejected, skipped_blocked))
+          % (done, matched, rejected, asked, skipped_blocked))
+    stats_out = os.environ.get("JANITOR_STATS_OUT")
+    if stats_out and not DRY:
+        with open(stats_out, "w", encoding="utf-8") as f:
+            json.dump({"processed": done, "matched": matched, "rejected": rejected,
+                       "asked": asked, "albums": len(albums)}, f)
 
 
 if __name__ == "__main__":

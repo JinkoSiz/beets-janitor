@@ -186,6 +186,15 @@ process_incoming() {
   done
 
   quarantine_broken "$INCOMING"
+
+  # что beets не взял: дубли по «исполнитель + название» и сорвавшийся
+  # импорт. Без разбора такой файл лежал бы в incoming вечно, а ночная
+  # работа ждёт пустого incoming — так прошли три ночи в сентябре 2026
+  run 1800 python3 "$SCRIPTS"/leftovers.py
+  find "$INCOMING" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r top; do
+    cleanup_one "$top"
+  done
+
   find "$INCOMING" -mindepth 1 -maxdepth 1 -type f | while IFS= read -r f; do
     case "$f" in
       *.mp3|*.flac|*.opus|*.m4a|*.ogg|*.wav|*.aac|*.wma) ;;
@@ -195,6 +204,9 @@ process_incoming() {
 
   find "$INCOMING" -mindepth 1 -depth -type d -exec rmdir {} + 2>/dev/null
   [ -n "$OWNER" ] && chown -R "$OWNER" "$LIBRARY" 2>/dev/null
+  # код возврата функции — код последней команды; без этой строки пустой
+  # OWNER превращал бы каждый разбор incoming в «упавший» шаг
+  return 0
 }
 
 library_scan() {
@@ -204,6 +216,7 @@ library_scan() {
     echo "-- lib: $d"
     run "$TMO_ALBUM" beet -c "$LIBCFG" import -q "$d"
   done
+  return 0
 }
 
 nightly_body() {
@@ -282,7 +295,17 @@ while true; do
   if [ "$n" -gt 0 ] && [ "$cur" = "$prev" ]; then
     if net_ok; then
       echo "=== $(date '+%F %T') incoming start, файлов: $n"
-      process_incoming
+      RUN_ID=$(jdb run-start incoming)
+      JANITOR_RUN_ID=$RUN_ID
+      export JANITOR_RUN_ID
+      step import 7200 process_incoming
+      # свежие импорты — сразу на сверку с превью: подмену в новой закачке
+      # лучше увидеть сегодня, а не когда до неё дойдёт ночная очередь
+      if [ -f "$SCRIPTS"/verify.py ]; then
+        step verify 1800 python3 "$SCRIPTS"/verify.py --new
+      fi
+      [ -n "$RUN_ID" ] && jdb run-finish "$RUN_ID" ok
+      unset JANITOR_RUN_ID
       echo "=== $(date '+%F %T') incoming done"
       echo "" > "$STATE"
     else

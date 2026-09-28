@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import env  # noqa: E402
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -117,7 +117,8 @@ CREATE TABLE IF NOT EXISTS quarantine (
     reason        TEXT NOT NULL,           -- duplicate | substitution | broken
     similarity    REAL,
     kept_path     TEXT,                    -- какая копия осталась вместо
-    album_id      INTEGER,                 -- из какого альбома beets убран: туда и вернётся
+    album_id      INTEGER,                 -- из какого альбома beets убран: туда и вернётся;
+                                           -- 0 — был одиночкой, NULL — неизвестно (старые записи)
     moved_at      TEXT NOT NULL,
     size          INTEGER,
     title         TEXT,
@@ -183,6 +184,19 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- сверка звука с превью источника (verify.py): та ли песня под этими тегами
+CREATE TABLE IF NOT EXISTS checks (
+    item_id     INTEGER PRIMARY KEY,       -- дорожка в базе beets
+    path        TEXT,
+    size        INTEGER,                   -- по размеру видно, что файл заменили
+    provider    TEXT,                      -- spotify | deezer
+    ref_id      TEXT,                      -- трек у источника, с чьим превью сверяли
+    similarity  REAL,
+    verdict     TEXT NOT NULL,             -- ok | unsure | substitution | no_preview | no_ref | failed
+    checked_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS checks_verdict ON checks(verdict);
 """
 
 
@@ -204,10 +218,21 @@ def connect(path=None):
 
 
 def migrate(con):
+    # новые таблицы добавляются через CREATE ... IF NOT EXISTS, поэтому
+    # старая база догоняет схему сама; версия — для будущих ALTER
     con.executescript(SCHEMA)
-    row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if row is None:
-        con.execute("INSERT INTO meta(key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
+    if int(meta_get(con, "schema_version") or 0) < SCHEMA_VERSION:
+        meta_set(con, "schema_version", SCHEMA_VERSION)
+
+
+def meta_get(con, key, default=None):
+    row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return row["value"] if row is not None else default
+
+
+def meta_set(con, key, value):
+    con.execute("INSERT INTO meta(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
 
 
 def _j(v):
@@ -339,12 +364,13 @@ DEFAULTS = {
     "fp_same_short": "0.60",
     "fp_ask": "0.55",
     "ref_ok": "0.85",
-    "ref_bad": "0.55",
+    "ref_bad": "0.60",
     "dupes_days": "14",
     "junk_days": "3",
     "follow_min_tracks": "3",
     "follow_enabled": "1",
     "auto_download": "0",
+    "verify_limit": "300",
 }
 
 

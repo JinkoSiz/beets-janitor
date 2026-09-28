@@ -17,6 +17,8 @@
 Картинку встраиваем в сам файл. Файл обложки рядом не кладём: синглтоны лежат
 в общей папке исполнителя, и cover.jpg там относился бы ко всем сразу.
 """
+import collections
+import json
 import os
 import re
 import sys
@@ -27,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests  # noqa: E402
 
 import env  # noqa: E402
-from retry import artist_ok  # noqa: E402
+from retry import translit, words  # noqa: E402
 
 DRY = "--dry" in sys.argv
 LIMIT = int(os.environ.get("COVERS_LIMIT", "0"))
@@ -45,6 +47,19 @@ def get(url, **kw):
         return r if r.status_code == 200 else None
     except Exception:
         return None
+
+
+def artist_ok(ours, theirs):
+    """Проверка исполнителя для поиска по названию.
+
+    Всё имя нашего исполнителя должно найтись в ответе, с поправкой на
+    раскладку (Кровосток — Krovostok). Одного общего слова мало: «Lil Peep»
+    и «Lil Tecca» делят «lil», и так на трек приезжает чужая обложка. Лишние
+    слова в ответе допустимы — там бывают приглашённые: «Xcho & Gor».
+    """
+    a = {translit(w) for w in words(clean_artist(ours))}
+    b = {translit(w) for w in words(theirs)}
+    return bool(a) and a <= b
 
 
 def art_musicbrainz(tid):
@@ -109,7 +124,7 @@ def art_itunes(artist, title):
 
     Ключа не требует, покрытие широкое, но именно такой поиск однажды принёс
     на «Mary Jane» обложку Mary J. Blige. Поэтому берём картинку, только если
-    у найденного исполнителя есть общее слово с нашим.
+    исполнитель совпал (см. artist_ok).
     """
     r = get("https://itunes.apple.com/search",
             params={"term": "%s %s" % (artist, title), "entity": "song", "limit": 5})
@@ -187,6 +202,114 @@ def fetch(tid, artist=None, title=None):
     return None, None
 
 
+# ---------------------------------------------------------------- поиск по тегу альбома
+# Для старых альбомов поиск по названию трека не срабатывает, а по паре
+# «исполнитель + альбом» каталоги отвечают. Результат берём, только если
+# исполнитель совпал и название альбома похоже.
+STOP = {"the", "a", "и", "feat", "ft", "single", "album", "ep", "remix", "by", "version"}
+TRIED = ["Spotify", "Deezer", "iTunes", "MusicBrainz"]
+
+
+def _words(s):
+    s = re.sub(r"[\(\[].*?[\)\]]", " ", str(s or "").lower())
+    return {w for w in re.findall(r"[a-zа-яё0-9']+", s) if w not in STOP}
+
+
+def album_ok(mine, theirs):
+    a, b = _words(mine), _words(theirs)
+    if not a or not b:
+        return False
+    if a <= b or b <= a:
+        return True
+    return len(a & b) / min(len(a), len(b)) >= 0.5
+
+
+def clean_artist(a):
+    # в запрос идёт только основной исполнитель: «Xcho (Feat. Gor)» -> «Xcho»
+    a = re.sub(r"[\(\[]\s*(feat|ft)\.?[^\)\]]*[\)\]]", " ", str(a or ""), flags=re.I)
+    return re.split(r"\s*(?:,|&|\+| feat\.? | ft\.? | x )\s*", a, flags=re.I)[0].strip()
+
+
+def clean_album(al):
+    return re.sub(r"[\(\[]\s*(single|ep|album)\s*[\)\]]", " ", str(al or ""), flags=re.I).strip()
+
+
+def fetch_album(artist, album):
+    """Обложка по тегу альбома: Deezer, затем iTunes. Вернуть (картинка, откуда)."""
+    r = get("https://api.deezer.com/search/album",
+            params={"q": "%s %s" % (clean_artist(artist), clean_album(album)), "limit": 8})
+    try:
+        data = (r.json() if r else {}).get("data") or []
+    except Exception:
+        data = []
+    for x in data:
+        who = ((x.get("artist") or {}).get("name")) or ""
+        if artist_ok(artist, who) and album_ok(album, x.get("title")):
+            for key in ("cover_xl", "cover_big"):
+                img = get(x[key]) if x.get(key) else None
+                if img and len(img.content) > MIN_BYTES:
+                    return img.content, "Deezer (альбом)"
+    time.sleep(PAUSE)
+    r = get("https://itunes.apple.com/search",
+            params={"term": "%s %s" % (clean_artist(artist), clean_album(album)), "entity": "album", "limit": 8})
+    try:
+        data = (r.json() if r else {}).get("results") or []
+    except Exception:
+        data = []
+    for x in data:
+        if artist_ok(artist, str(x.get("artistName") or "")) and album_ok(album, x.get("collectionName")):
+            u = x.get("artworkUrl100")
+            img = get(re.sub(r"\d+x\d+bb", "600x600bb", u)) if u else None
+            if img and len(img.content) > MIN_BYTES:
+                return img.content, "iTunes (альбом)"
+    return None, None
+
+
+# ---------------------------------------------------------------- общая база
+_con = None
+
+
+def db():
+    global _con
+    if _con is None:
+        import janitordb
+        _con = janitordb.connect()
+    return _con
+
+
+def group_key(artist, album):
+    return "cover:%s|%s" % (" ".join(sorted(_words(artist))), " ".join(sorted(_words(album))))
+
+
+def note_found(key, items, src):
+    """Обложка поставлена: в журнал и снять вопрос, если он стоял в пульте."""
+    if DRY:
+        return
+    import janitordb
+    for it in items:
+        janitordb.log_event(db(), "covers", "cover", {"cover": None}, {"cover": src},
+                            item_id=it.id, path=it.path.decode("utf-8", "replace"))
+    db().execute("UPDATE reviews SET status='resolved', decision='found', decided_at=? "
+                 "WHERE key=? AND status='open'", (janitordb.now(), key))
+
+
+def ask_cover(key, artist, album, items):
+    """Не нашлось нигде — в пульт: там можно положить картинку руками."""
+    if DRY:
+        return
+    import janitordb
+    payload = {"artist": artist, "album": album, "count": len(items),
+               "item_ids": [it.id for it in items], "tried": TRIED,
+               "paths": [it.path.decode("utf-8", "replace") for it in items[:3]]}
+    janitordb.ask(db(), "cover", key, album or (items[0].title if items else ""), payload)
+
+
+def embed(mediafile, p, img):
+    f = mediafile.MediaFile(p)
+    f.images = [mediafile.Image(data=img, desc=None, type=mediafile.ImageType.front)]
+    f.save()
+
+
 def main():
     import mediafile
     import retry
@@ -213,13 +336,13 @@ def main():
         todo = todo[:LIMIT]
         print("ограничение прогона: %d" % LIMIT)
 
-    ok = fail = 0
+    ok = 0
+    missing = []
     for it, p, rid in todo:
         img, src = fetch(rid, str(it.artist), str(it.title))
         time.sleep(PAUSE)
         if not img:
-            fail += 1
-            print("   -- не нашлось: %-24s %s" % (str(it.artist)[:24], str(it.title)[:30]))
+            missing.append((it, p))
             continue
         print("   ++ %-9s %-24s %-30s %d КБ"
               % (src, str(it.artist)[:24], str(it.title)[:30], len(img) // 1024))
@@ -227,17 +350,48 @@ def main():
             ok += 1
             continue
         try:
-            f = mediafile.MediaFile(p)
-            f.images = [mediafile.Image(data=img, desc=None,
-                                        type=mediafile.ImageType.front)]
-            f.save()
+            embed(mediafile, p, img)
+            note_found(group_key(it.artist, it.album), [it], src)
             ok += 1
         except Exception as e:
-            fail += 1
+            missing.append((it, p))
             print("      !! записать не вышло: %s" % str(e)[:60])
 
-    print("обложек проставлено: %d, не нашлось: %d" % (ok, fail))
-    albums(lib, mediafile)
+    # второй заход: то, что не нашлось по треку, — группами по тегу альбома.
+    # 42 трека одного бутлега — это один вопрос в пульте, а не 42
+    groups = collections.defaultdict(list)
+    for it, p in missing:
+        groups[(str(it.artist), str(it.album).strip())].append((it, p))
+    by_album = asked = 0
+    for (artist, album), members in sorted(groups.items(), key=lambda x: -len(x[1])):
+        key = group_key(artist, album)
+        items = [it for it, _ in members]
+        img, src = (fetch_album(artist, album) if album else (None, None))
+        time.sleep(PAUSE)
+        if img:
+            print("   ++ %-16s %-24s %-30s (%d)" % (src, artist[:24], album[:30], len(members)))
+            if not DRY:
+                for it, p in members:
+                    try:
+                        embed(mediafile, p, img)
+                    except Exception as e:
+                        print("      !! %s: %s" % (os.path.basename(p)[:30], str(e)[:50]))
+                note_found(key, items, src)
+            by_album += len(members)
+            continue
+        print("   -- не нашлось: %-24s %-30s (%d)" % (artist[:24], (album or "без альбома")[:30], len(members)))
+        ask_cover(key, artist, album, items)
+        asked += 1
+
+    left = len(missing) - by_album
+    print("обложек по треку: %d, по тегу альбома: %d, не нашлось: %d (вопросов в пульт: %d)"
+          % (ok, by_album, left, asked))
+    alb_ok, alb_fail = albums(lib, mediafile)
+    stats_out = os.environ.get("JANITOR_STATS_OUT")
+    if stats_out and not DRY:
+        with open(stats_out, "w", encoding="utf-8") as f:
+            json.dump({"singles_found": ok + by_album, "singles_missing": left,
+                       "albums_found": alb_ok, "albums_missing": alb_fail}, f)
 
 
 AUDIO_EXT = (".mp3", ".flac", ".opus", ".m4a", ".ogg", ".wav", ".aac", ".wma")
@@ -266,6 +420,13 @@ def folder_is_single_album(d, mediafile):
     return len(names) <= 1
 
 
+def has_art(item, mediafile):
+    try:
+        return bool(mediafile.MediaFile(item.path.decode("utf-8", "replace")).images)
+    except Exception:
+        return False
+
+
 def albums(lib, mediafile):
     """Альбомы, которых не осилил fetchart.
 
@@ -273,7 +434,12 @@ def albums(lib, mediafile):
     возвращает пустоту (а иногда и чужую картинку). Здесь идём тем же путём,
     что и для синглтонов: по идентификатору дорожки, то есть наверняка.
     """
+    # По названию здесь ищем только альбом (fetch_album, с проверкой и
+    # исполнителя, и названия). Поиск песни по названию альбома, который тут
+    # стоял раньше, проверял одного исполнителя и приносил обложку любой его
+    # песни — а при слабой проверке и чужой.
     todo = []
+    embedded = 0
     for a in lib.albums():
         ap = a.artpath.decode("utf-8", "replace") if a.artpath else ""
         if ap and os.path.isfile(ap):
@@ -281,21 +447,34 @@ def albums(lib, mediafile):
         its = list(a.items())
         if not its:
             continue
+        # Картинка уже встроена во все дорожки — делать нечего. Файл обложки
+        # в общую папку мы нарочно не кладём (см. ниже), и без этой проверки
+        # такие альбомы каждую ночь «находились» бы заново: 35 одних и тех же
+        # за ночь, с записью в журнал на каждую дорожку.
+        if all(has_art(i, mediafile) for i in its):
+            embedded += 1
+            continue
         tid = next((str(i.mb_trackid) for i in its if str(i.mb_trackid or "").strip()), "")
         todo.append((a, its, tid))
 
     print()
-    print("альбомов без обложки: %d" % len(todo))
+    print("альбомов без обложки: %d (ещё %d без файла обложки, но с картинкой в дорожках — "
+          "их не трогаю)" % (len(todo), embedded))
     if LIMIT:
         todo = todo[:LIMIT]
 
     ok = fail = 0
     for a, its, tid in todo:
-        img, src = fetch(tid, str(a.albumartist), str(a.album))
+        img, src = fetch(tid)
+        if not img:
+            time.sleep(PAUSE)
+            img, src = fetch_album(str(a.albumartist), str(a.album))
         time.sleep(PAUSE)
+        key = group_key(a.albumartist, a.album)
         if not img:
             fail += 1
             print("   -- не нашлось: %-24s %s" % (str(a.albumartist)[:24], str(a.album)[:30]))
+            ask_cover(key, str(a.albumartist), str(a.album), its)
             continue
         d = os.path.dirname(its[0].path.decode("utf-8", "replace"))
         print("   ++ %-9s %-24s %-30s %d КБ"
@@ -327,12 +506,14 @@ def albums(lib, mediafile):
                         f.save()
                 except Exception:
                     pass
+            note_found(key, its, src)
             ok += 1
         except Exception as e:
             fail += 1
             print("      !! записать не вышло: %s" % str(e)[:60])
 
     print("обложек альбомам проставлено: %d, не нашлось: %d" % (ok, fail))
+    return ok, fail
 
 
 if __name__ == "__main__":

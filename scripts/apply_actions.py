@@ -12,6 +12,9 @@
               убрать дорожку в карантин
   restore     {"quarantine_id"}
               вернуть файл из карантина на прежнее место и в базу beets
+  import      {"quarantine_id"}
+              импортировать файл из карантина рядом с имеющейся копией —
+              для того, что leftovers.py убрал из incoming как дубль
   set_cover   {"item_ids": [...], "image": путь к загруженной картинке}
               встроить обложку в файлы и, если папка принадлежит одному
               альбому, положить рядом cover.jpg
@@ -119,12 +122,16 @@ def do_restore(con, lib, p):
     # В базу заводим напрямую, а не через `beet import`: импорт одного файла
     # делает из дорожки альбома одиночку, и следующий дедуп снова счёл бы её
     # пустышкой. Возвращаем в тот альбом, из которого убрали; если его уже
-    # нет — в альбом из той же папки с теми же тегами.
+    # нет — в альбом из той же папки с теми же тегами. album_id = 0 значит,
+    # что дорожка была одиночкой: такой она и вернётся. NULL — старая запись,
+    # где альбом неизвестен, для неё и работает подбор по папке.
     from beets.library import Item
     item = Item.from_path(dst)
     lib.add(item)
     target = None
-    if row["album_id"] and lib.get_album(row["album_id"]) is not None:
+    if row["album_id"] == 0:
+        pass
+    elif row["album_id"] and lib.get_album(row["album_id"]) is not None:
         target = row["album_id"]
     else:
         folder = os.path.dirname(dst)
@@ -141,6 +148,36 @@ def do_restore(con, lib, p):
     con.execute("UPDATE quarantine SET status='restored' WHERE id=?", (row["id"],))
     jdb.log_event(con, "panel", "restore", {"path": src}, {"path": dst}, item_id=item.id, path=dst)
     return "возвращено: %s" % os.path.relpath(dst, env.MUSIC_DIR)
+
+
+def do_import(con, lib, p):
+    """Импортировать файл из карантина всё равно.
+
+    Для того, что leftovers.py убрал из incoming как дубль: «на место» его
+    не вернуть — в incoming beets снова его пропустит. Поэтому импортируем
+    прямо из карантина с duplicate_action: keep, и move переносит файл в
+    фонотеку по обычным правилам путей.
+    """
+    import subprocess
+    row = con.execute("SELECT * FROM quarantine WHERE id=?", (int(p["quarantine_id"]),)).fetchone()
+    if row is None:
+        raise Refused("нет такой записи карантина")
+    src = row["path"]
+    if not inside(src, env.DUPES_DIR, env.BROKEN_DIR):
+        raise Refused("путь вне карантина: %s" % src)
+    if not os.path.isfile(src):
+        con.execute("UPDATE quarantine SET status='purged' WHERE id=?", (row["id"],))
+        raise Refused("файла в карантине уже нет — удалён по сроку")
+    cfg = os.path.join(env.CONFIG_DIR, "import-single-keep.yaml")
+    if not os.path.exists(cfg):
+        raise Refused("нет %s — разложите конфиги (render-config.py)" % cfg)
+    r = subprocess.run(["timeout", "600", "beet", "-c", cfg, "import", "-q", "-s", src],
+                       capture_output=True, text=True)
+    if os.path.exists(src):
+        raise Exception("beets не взял файл (код %d): %s" % (r.returncode, (r.stderr or r.stdout).strip()[-200:]))
+    con.execute("UPDATE quarantine SET status='restored' WHERE id=?", (row["id"],))
+    jdb.log_event(con, "panel", "import", {"path": src}, {"from": "quarantine"}, path=src)
+    return "импортировано: %s" % os.path.basename(src)
 
 
 def do_set_cover(con, lib, p):
@@ -237,6 +274,7 @@ def do_run(con, lib, p):
 HANDLERS = {
     "quarantine": do_quarantine,
     "restore": do_restore,
+    "import": do_import,
     "set_cover": do_set_cover,
     "rollback": do_rollback,
     "run": do_run,

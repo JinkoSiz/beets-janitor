@@ -130,12 +130,10 @@ def main():
         if h:
             groups[(k, h)].append(it)
 
-    journal = None
+    con = None
     if not DRY:
-        try:
-            journal = open(JOURNAL, "a")
-        except Exception:
-            journal = None
+        import janitordb
+        con = janitordb.connect()
 
     fixed = albums = 0
     for (k, h), items in sorted(groups.items(), key=lambda x: -len(x[1])):
@@ -194,21 +192,19 @@ def main():
             i.comp = 0
             i.store()
             i.try_write()
-            if journal:
-                journal.write(json.dumps({
-                    "date": datetime.date.today().isoformat(),
-                    "path": i.path.decode("utf-8", "replace"),
-                    "why": "обложка",
-                    "before": before,
-                    "after": {"album": i.album, "track": i.track,
-                              "albumartist": i.albumartist, "comp": i.comp},
-                }, ensure_ascii=False, default=str) + "\n")
-                journal.flush()
+            if con is not None:
+                janitordb.log_event(
+                    con, "albumgroup", "album", before,
+                    {"album": i.album, "track": i.track, "albumartist": i.albumartist,
+                     "comp": i.comp, "why": "обложка"},
+                    item_id=i.id, path=i.path.decode("utf-8", "replace"))
             fixed += 1
 
-    if journal:
-        journal.close()
     print("собрано альбомов: %d, дорожек возвращено: %d" % (albums, fixed))
+    stats_out = os.environ.get("JANITOR_STATS_OUT")
+    if stats_out and not DRY:
+        with open(stats_out, "w", encoding="utf-8") as f:
+            json.dump({"albums": albums, "fixed": fixed}, f)
 
 
 if __name__ == "__main__":

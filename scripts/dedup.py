@@ -175,20 +175,31 @@ def items():
 
 
 def rank(i):
-    non_album = 1 if "/Non-Album/" in i["path"] else 0
+    # копия из свалки уступает копии из папки альбома
+    non_album = 1 if any(j in i["path"] for j in LOOSE) else 0
     return (-i["br"], non_album, -i["size"])
 
 
-def quarantine(it):
-    rel = it["path"].lstrip("/")
-    if rel.startswith("music/"):
-        rel = rel[len("music/"):]
+_con = None
+
+
+def db():
+    global _con
+    if _con is None:
+        import janitordb
+        _con = janitordb.connect()
+    return _con
+
+
+def quarantine(it, sim=None, kept=None):
+    p = it["path"]
+    rel = os.path.relpath(p, env.MUSIC_DIR) if p.startswith(env.MUSIC_DIR + "/") else p.lstrip("/")
     dst = os.path.join(DUPES, rel)
     if DRY:
-        return "БЫ УБРАЛ [%s] %s" % (it["br"], it["path"])
+        return "БЫ УБРАЛ [%s] %s" % (it["br"], p)
     try:
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.move(it["path"], dst)
+        shutil.move(p, dst)
         # чистка карантина смотрит на дату файла, а перемещение её сохраняет:
         # без этой отметки старая запись удалялась бы почти сразу, а не через
         # положенные две недели
@@ -196,7 +207,20 @@ def quarantine(it):
     except Exception as e:
         return "ОШИБКА: %s" % e
     subprocess.run(["beet", "remove", "-f", "id:%s" % it["id"]], capture_output=True, text=True)
-    return "убран [%s] %s" % (it["br"], it["path"])
+    try:
+        import janitordb
+        janitordb.quarantine_add(db(), dst, p, "duplicate", similarity=round(sim, 3) if sim else None,
+                                 kept_path=kept, title=it.get("title"), artist=it.get("who"),
+                                 # 0 — одиночка: при возврате альбом ей не подбирать
+                                 album_id=int(it["album_id"]) if str(it.get("album_id") or "").isdigit() else 0)
+        janitordb.log_event(db(), "dedup", "quarantine", {"path": p},
+                            {"path": dst, "why": "дубль %.0f%%" % (sim * 100) if sim else "дубль"},
+                            item_id=int(it["id"]) if str(it["id"]).isdigit() else None, path=p)
+    except Exception as e:
+        # база — удобство для пульта, а не условие работы: файл уже убран,
+        # и падать из-за записи в журнал нельзя
+        print("   !! не записалось в базу: %s" % str(e)[:80])
+    return "убран [%s] %s" % (it["br"], p)
 
 
 def removable(keep, victim):
@@ -259,7 +283,7 @@ def resolve(g, tolerance, lines, gone):
                         % (sim * 100, bar * 100, i["path"]))
             versions += 1
             continue
-        body.append("    %s  (отпечаток %.0f%%)" % (quarantine(i), sim * 100))
+        body.append("    %s  (отпечаток %.0f%%)" % (quarantine(i, sim, g[0]["path"]), sim * 100))
         gone.add(i["id"])
         moved += 1
     lines.extend(head + body)
@@ -308,6 +332,12 @@ def main():
     print(head)
     with open(REPORT + (".dry" if DRY else ""), "w") as f:
         f.write(head + "\n\n" + "\n".join(lines) + "\n")
+    stats_out = os.environ.get("JANITOR_STATS_OUT")
+    if stats_out and not DRY:
+        import json
+        with open(stats_out, "w", encoding="utf-8") as f:
+            json.dump({"moved": moved, "releases": cross + cross2, "pressings": pressing,
+                       "versions": versions, "suspect": suspect}, f)
 
 
 if __name__ == "__main__":

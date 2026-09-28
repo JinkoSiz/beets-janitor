@@ -1,0 +1,12 @@
+# То же, что import-single.yaml, но копия рядом с существующей заводится.
+# Им leftovers.py импортирует другую версию песни, которую beets принял за
+# дубль: он сравнивает только исполнителя и название, а звук не слушает.
+threaded: no
+import:
+    quiet: yes
+    quiet_fallback: asis
+    move: yes
+    copy: no
+    incremental: no
+    duplicate_action: keep
+    write: yes

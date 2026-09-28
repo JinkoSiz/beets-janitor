@@ -269,11 +269,21 @@ def quarantine(it, root, why, reason="duplicate", similarity=None, kept=None):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.move(p, dst)
     os.utime(dst, None)
-    journal(op="quarantine", why=why, src=p, dst=dst, id=it.id, artist=str(it.artist),
-            title=str(it.title), album=str(it.album), album_id=it.album_id)
-    jdb.quarantine_add(db(), dst, p, reason, similarity=similarity, kept_path=kept,
-                       title=str(it.title), artist=str(it.artist), album_id=it.album_id)
+    # 0 — точно одиночка, при возврате альбом ей не подбирать;
+    # NULL остаётся за старыми записями, где это неизвестно
+    album_id = it.album_id or 0
+    iid, artist, title, album = it.id, str(it.artist), str(it.title), str(it.album)
+    # сначала база beets, потом журнал: если журнал не запишется, beets всё
+    # равно не должен ссылаться на уехавший файл. Запись карантина потом
+    # восстановит sync_quarantine по самому файлу
     it.remove(delete=False)
+    try:
+        journal(op="quarantine", why=why, src=p, dst=dst, id=iid, artist=artist,
+                title=title, album=album, album_id=album_id)
+        jdb.quarantine_add(db(), dst, p, reason, similarity=similarity, kept_path=kept,
+                           title=title, artist=artist, album_id=album_id)
+    except Exception as e:
+        log("      !! не записалось в общую базу: %s" % str(e)[:80])
 
 
 def move_into(it, dst_dir):
