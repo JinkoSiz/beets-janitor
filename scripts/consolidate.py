@@ -45,6 +45,7 @@ from beets.library import Album  # noqa: E402
 
 import dedup  # noqa: E402
 import env  # noqa: E402
+import janitordb as jdb  # noqa: E402
 import retry  # noqa: E402
 from retry import artist_ok  # noqa: E402
 
@@ -79,26 +80,72 @@ CYR = "АВЕКМНОРСТУХаеорсух"
 LAT = "ABEKMHOPCTYXaeopcyx"
 TBL = str.maketrans(CYR, LAT)
 
-JOURNAL = env.CONSOLIDATE_JOURNAL
 lines = []
-_journal = None
+_con = None
 
 
 def log(s=""):
     lines.append(s)
 
 
+def db():
+    """Соединение с общей базой. В сухом прогоне только читаем, и если базы
+    ещё нет — не создаём её: сухой прогон не должен оставлять следов."""
+    global _con
+    if _con is None:
+        if DRY and not os.path.exists(env.JANITOR_DB):
+            return None
+        _con = jdb.connect()
+    return _con
+
+
 def journal(**rec):
-    """Строка в журнал: по ней всё можно откатить руками."""
-    global _journal
+    """Запись в журнал общей базы: по ней пульт показывает «было -> стало»
+    и умеет откатить. src/dst превращаются в пути до и после, остальные
+    поля ложатся подробностями рядом с «после»."""
     if DRY:
         return
-    if _journal is None:
-        _journal = open(JOURNAL, "a", encoding="utf-8")
-    import datetime
-    rec["date"] = datetime.datetime.now().isoformat(timespec="seconds")
-    _journal.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
-    _journal.flush()
+    op = rec.pop("op")
+    item_id = rec.pop("id", None)
+    before = rec.pop("before", None)
+    after = rec.pop("after", None)
+    src = rec.pop("src", None)
+    dst = rec.pop("dst", None)
+    path = rec.pop("path", None) or src
+    if src is not None or dst is not None:
+        before = dict(before or {})
+        after = dict(after or {})
+        if src is not None:
+            before.setdefault("path", src)
+        if dst is not None:
+            after.setdefault("path", dst)
+    if rec:
+        after = dict(after or {})
+        after.update(rec)
+    jdb.log_event(db(), "consolidate", op, before, after, item_id=item_id, path=path)
+
+
+def file_info(it):
+    """Что пульт покажет о файле в карточке решения."""
+    p = path_of(it)
+    return {"path": p, "item_id": it.id, "format": str(it.format), "bitrate": int(it.bitrate or 0) // 1000,
+            "length": round(float(it.length or 0), 1), "title": str(it.title), "artist": str(it.artist)}
+
+
+def ask_pair(kind, a, b, sim, hint=None):
+    """Поставить спорную пару в очередь решений. Возвращает решение, если
+    на этот вопрос уже отвечали, иначе None. В сухом прогоне только читает."""
+    key = jdb.pair_key(kind, path_of(a), path_of(b))
+    con = db()
+    if con is None:
+        return None
+    if DRY:
+        status, decision = jdb.review_state(con, key)
+        return decision if status in ("resolved", "dismissed") else None
+    payload = {"album": str(a.album), "albumartist": str(a.albumartist or a.artist),
+               "similarity": round(sim, 3), "files": [file_info(a), file_info(b)], "hint": hint}
+    status, decision = jdb.ask(con, kind, key, str(a.title), payload)
+    return decision if status in ("resolved", "dismissed") else None
 
 
 def norm(s):
@@ -210,7 +257,9 @@ def rank(it, master_dir):
             -os.path.getsize(p) if os.path.isfile(p) else 0)
 
 
-def quarantine(it, root, why):
+def quarantine(it, root, why, reason="duplicate", similarity=None, kept=None):
+    """Убрать файл в карантин. reason — duplicate | broken | substitution:
+    по нему пульт группирует карантин и решает, есть ли что возвращать."""
     p = path_of(it)
     rel = env.in_music(p) if p.startswith(env.MUSIC_DIR + "/") else p.lstrip("/")
     dst = os.path.join(root, rel)
@@ -222,6 +271,8 @@ def quarantine(it, root, why):
     os.utime(dst, None)
     journal(op="quarantine", why=why, src=p, dst=dst, id=it.id, artist=str(it.artist),
             title=str(it.title), album=str(it.album), album_id=it.album_id)
+    jdb.quarantine_add(db(), dst, p, reason, similarity=similarity, kept_path=kept,
+                       title=str(it.title), artist=str(it.artist), album_id=it.album_id)
     it.remove(delete=False)
 
 
@@ -650,9 +701,13 @@ def step_group(lib, key, items, stats):
                     path_of(lst[i]).replace(env.MUSIC_DIR + "/", ""), path_of(lst[j]).replace(env.MUSIC_DIR + "/", "")))
                 stats[key] += 1
                 if key != "versions":
-                    # спорную пару не двигаем и не сводим: пусть лежит, где лежала
+                    # спорную пару не двигаем и не сводим: пусть лежит, где лежала,
+                    # а вопрос уходит в пульт (или уже решён там)
                     stay.add(lst[i].id)
                     stay.add(lst[j].id)
+                    decided = ask_pair("substitution" if key == "alien" else "duplicate", lst[i], lst[j], s)
+                    if decided:
+                        log("      решено раньше: %s" % decided)
             continue
         for g in groups_:
             if len(g) < 2:
@@ -671,7 +726,8 @@ def step_group(lib, key, items, stats):
                     # напрямую с остающимся не сравнивались (связаны через
                     # третью копию) — сравним сейчас, для отчёта
                     s = same_audio(path_of(keep), path_of(v)) or 0.0
-                quarantine(v, DUPES, "дубль %.0f%%" % (s * 100))
+                quarantine(v, DUPES, "дубль %.0f%%" % (s * 100), reason="duplicate",
+                           similarity=round(s, 3), kept=path_of(keep))
                 gone.add(v.id)
                 stats["dupes"] += 1
         # то, что осталось в одиночестве рядом с группой дублей: другая версия
@@ -696,6 +752,11 @@ def step_group(lib, key, items, stats):
                 stats[key] += 1
                 if key != "versions":
                     stay.add(lst[i].id)
+                    decided = ask_pair("substitution" if key == "alien" else "duplicate",
+                                       lst[main_keep], lst[i], s,
+                                       hint="рядом есть копия, совпавшая с остальными")
+                    if decided:
+                        log("         решено раньше: %s" % decided)
     items = [i for i in items if i.id not in gone]
     # подмены и «не уверен» остаются где были и в слиянии не участвуют
     items = [i for i in items if i.id not in stay]
@@ -851,7 +912,7 @@ def step_broken(lib, stats):
         if float(it.length or 0) < 1 and not playable(p):
             log("")
             log("битый (длительность 0): %s — %s" % (str(it.artist)[:30], str(it.title)[:40]))
-            quarantine(it, BROKEN, "битый")
+            quarantine(it, BROKEN, "битый", reason="broken")
             stats["broken"] += 1
 
 
@@ -905,6 +966,11 @@ def main():
     print(head)
     with open(REPORT + (".dry" if DRY else ""), "w", encoding="utf-8") as f:
         f.write(head + "\n" + "\n".join(lines) + "\n")
+    # счётчики для сводки пульта: nightly.sh подхватит их в шаг прогона
+    stats_json = os.environ.get("JANITOR_STATS_OUT")
+    if stats_json and not DRY:
+        with open(stats_json, "w", encoding="utf-8") as f:
+            json.dump(dict(stats), f, ensure_ascii=False)
 
 
 if __name__ == "__main__":

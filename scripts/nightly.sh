@@ -68,7 +68,13 @@ net_ok() {
 run() {
   t=$1
   shift
-  timeout "$t" "$@"
+  # timeout запускает только программы; shell-функцию (library_scan,
+  # cleanup_residue) выполняем как есть — у них свои внутренние таймауты
+  if type "$1" 2>/dev/null | grep -q "function"; then
+    "$@"
+  else
+    timeout "$t" "$@"
+  fi
   rc=$?
   # молчаливые падения — худший вид: неверный ключ команды однажды сломал
   # ночную работу, а лог об этом ничего не сказал
@@ -77,7 +83,32 @@ run() {
   elif [ "$rc" -ne 0 ]; then
     echo "!! ОШИБКА (код $rc): $*"
   fi
+  LAST_RC=$rc
   return 0
+}
+
+jdb() {
+  # общая база набора; её недоступность не должна ронять сторожа
+  python3 "$SCRIPTS"/janitordb.py "$@" 2>/dev/null
+}
+
+step() {
+  # step ИМЯ ТАЙМАУТ команда... — то же, что run, но шаг попадает в базу:
+  # пульт строит сводку ночи из этих записей, а не из текстового лога
+  name=$1
+  shift
+  sid=$(jdb step-start "$RUN_ID" "$name")
+  JANITOR_STATS_OUT=$(mktemp)
+  export JANITOR_STATS_OUT
+  run "$@"
+  case "$LAST_RC" in
+    0) st=ok ;;
+    124) st=timeout ;;
+    *) st=failed ;;
+  esac
+  [ -n "$sid" ] && jdb step-finish "$sid" "$st" "$(cat "$JANITOR_STATS_OUT" 2>/dev/null)"
+  rm -f "$JANITOR_STATS_OUT"
+  unset JANITOR_STATS_OUT
 }
 
 BROKEN="$RESIDUE/_broken"
@@ -118,6 +149,9 @@ cleanup_residue() {
   find "$RESIDUE" -mindepth 1 -maxdepth 1 ! -name "_dupes" -mtime +$JUNK_DAYS -exec rm -rf {} + 2>/dev/null
   find "$RESIDUE/_dupes" -type f -mtime +$DUPES_DAYS -delete 2>/dev/null
   find "$RESIDUE" -mindepth 1 -depth -type d -exec rmdir {} + 2>/dev/null
+  # файлы, удалённые по сроку, помечаем в базе — иначе пульт показывал бы их
+  # в карантине с кнопкой «Вернуть», которой нечего возвращать
+  jdb sync-quarantine
   echo "-- карантин: $(du -sh "$RESIDUE" 2>/dev/null | cut -f1)"
 }
 
@@ -173,35 +207,50 @@ library_scan() {
 }
 
 nightly_body() {
+  # прогон в общей базе: по нему пульт показывает сводку ночи
+  RUN_ID=$(jdb run-start nightly)
+  JANITOR_RUN_ID=$RUN_ID
+  export JANITOR_RUN_ID
+
   echo "=== $(date '+%F %T') начало ночной работы"
   echo "-- было: треков $(beet ls -f x | wc -l), без MBID $(beet ls -f x 'mb_trackid::^$' | wc -l), альбомов $(beet ls -a -f x | wc -l)"
 
   echo "=== $(date '+%F %T') сканирование библиотеки"
-  library_scan
+  step library_scan 7200 library_scan
   echo "=== $(date '+%F %T') кодировка тегов"
-  run 3600 python3 "$SCRIPTS"/fixenc.py "$LIBRARY"
-  run 3600 beet update -M
-  run 1800 python3 "$SCRIPTS"/fixnames.py
+  step fixenc 3600 python3 "$SCRIPTS"/fixenc.py "$LIBRARY"
+  step "beet update" 3600 beet update -M
+  step fixnames 1800 python3 "$SCRIPTS"/fixnames.py
   echo "=== $(date '+%F %T') добивание as-is"
-  run 18000 python3 "$SCRIPTS"/retry.py
+  step retry 18000 python3 "$SCRIPTS"/retry.py
   echo "=== $(date '+%F %T') нормализация тегов"
-  run 3600 python3 "$SCRIPTS"/normalize.py
+  step normalize 3600 python3 "$SCRIPTS"/normalize.py
   echo "=== $(date '+%F %T') сборка развалившихся альбомов"
-  run 3600 python3 "$SCRIPTS"/albumgroup.py
+  step albumgroup 3600 python3 "$SCRIPTS"/albumgroup.py
   echo "=== $(date '+%F %T') дедуп"
-  run 1800 python3 "$SCRIPTS"/dedup.py
+  step dedup 1800 python3 "$SCRIPTS"/dedup.py
   echo "=== $(date '+%F %T') один альбом - один экземпляр"
-  run 7200 python3 "$SCRIPTS"/consolidate.py
+  step consolidate 7200 python3 "$SCRIPTS"/consolidate.py
+  if [ -f "$SCRIPTS"/verify.py ]; then
+    echo "=== $(date '+%F %T') проверка по превью Spotify"
+    step verify 3600 python3 "$SCRIPTS"/verify.py
+  fi
+  if [ -f "$SCRIPTS"/follow.py ]; then
+    echo "=== $(date '+%F %T') новинки исполнителей"
+    step follow 3600 python3 "$SCRIPTS"/follow.py
+  fi
   echo "=== $(date '+%F %T') обложки"
-  run 3600 python3 "$SCRIPTS"/covers.py
+  step covers 3600 python3 "$SCRIPTS"/covers.py
   echo "=== $(date '+%F %T') чистка карантина"
-  cleanup_residue
+  step cleanup 600 cleanup_residue
   [ -n "$OWNER" ] && chown -R "$OWNER" "$LIBRARY" 2>/dev/null
 
   echo "-- стало: треков $(beet ls -f x | wc -l), без MBID $(beet ls -f x 'mb_trackid::^$' | wc -l), альбомов $(beet ls -a -f x | wc -l)"
   echo "-- Spotify: пауза $(cat "$CONFIG/.spotify-pace" 2>/dev/null), потрачено $(cat "$CONFIG/.spotify-budget" 2>/dev/null)"
   echo "-- отказов 429 за ночь: $(grep -c "^$(date '+%F').*429" "$CONFIG/net.log" 2>/dev/null)"
   echo "=== $(date '+%F %T') ночная работа завершена"
+  [ -n "$RUN_ID" ] && jdb run-finish "$RUN_ID" ok
+  unset JANITOR_RUN_ID
 }
 
 nightly() {
@@ -219,6 +268,12 @@ nightly() {
 }
 
 while true; do
+  # решения из пульта: пульт сам файлы не трогает, он кладёт действие в
+  # очередь, а выполняем его мы — единственный, кто пишет в библиотеку
+  if [ -f "$SCRIPTS"/apply_actions.py ]; then
+    run 1800 python3 "$SCRIPTS"/apply_actions.py
+  fi
+
   cur=$(snapshot)
   prev=$(cat "$STATE" 2>/dev/null)
   echo "$cur" > "$STATE"
@@ -241,6 +296,12 @@ while true; do
   # отметка о выполнении ставится ТОЛЬКО после успеха, иначе упавший канал
   # в 05:00 отменял бы всю работу на сутки
   today=$(date '+%F')
+  # «Запустить сейчас» из пульта: флаг ставит apply_actions.py
+  if [ -f "$CONFIG/.run-now" ] && [ "$n" -eq 0 ]; then
+    rm -f "$CONFIG/.run-now"
+    echo "=== $(date '+%F %T') ночная работа по кнопке из пульта"
+    nightly
+  fi
   if [ "$(date '+%H')" -ge "$NIGHTLY_HOUR" ] && [ "$(cat "$STAMP" 2>/dev/null)" != "$today" ]; then
     if [ "$n" -eq 0 ] && net_ok; then
       nightly

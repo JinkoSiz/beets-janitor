@@ -38,6 +38,10 @@ BROKEN_DIR = os.path.join(RESIDUE_DIR, "_broken")
 # чтобы открытие библиотеки не тянуло за собой сеть и плагины.
 LIBRARY_CONFIG = os.path.join(CONFIG_DIR, "library.yaml")
 
+# Общая база набора: прогоны, журнал, очередь решений и действий. Её же
+# читает пульт. Лежит рядом с базой beets — без неё она бессмысленна.
+JANITOR_DB = os.environ.get("JANITOR_DB", os.path.join(CONFIG_DIR, "janitor.db"))
+
 # Служебные файлы. Держим рядом с базой: их содержимое бессмысленно без неё.
 JOURNAL = os.path.join(CONFIG_DIR, "applied.jsonl")
 RETRY_STATE = os.path.join(CONFIG_DIR, ".retried")
