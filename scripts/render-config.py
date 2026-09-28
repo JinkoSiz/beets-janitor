@@ -56,7 +56,7 @@ def main():
         if not v:
             missing.append(k)
 
-    written = kept = 0
+    written = kept = rendered = 0
     for name in sorted(os.listdir(SRC)):
         src = os.path.join(SRC, name)
         if not os.path.isfile(src):
@@ -78,6 +78,7 @@ def main():
             except Exception as e:
                 sys.exit("не подставилось в %s: %s" % (name, e))
             print("  %s -> %s" % (name, dst))
+            rendered += 1
             if not DRY:
                 with open(dst, "w", encoding="utf-8", newline="\n") as f:
                     f.write(text)
@@ -90,7 +91,9 @@ def main():
     print()
     print("разложено: %d, оставлено как было: %d%s"
           % (written, kept, "   [СУХОЙ ПРОГОН]" if DRY else ""))
-    if missing:
+    # Про ключи говорим, только если конфиг собран из шаблона сейчас: если он
+    # уже был, ключи могли вписать в него руками, и окружение тут ни при чём
+    if missing and rendered:
         print()
         print("!! не заданы: %s" % ", ".join(missing))
         print("   Spotify без них работать не будет: плагин промолчит, а треки")
