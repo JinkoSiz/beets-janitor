@@ -65,7 +65,7 @@
         <button class="btn primary" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"keep_b"}' hx-target="#card-{{ r.id }}" hx-swap="outerHTML">Оставить B</button>
         {% endif %}
         {% if r.kind == 'substitution' %}
-        <button class="btn" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"different"}' hx-target="#card-{{ r.id }}" hx-swap="outerHTML">Это разные песни</button>
+        <button class="btn" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"different"}' hx-target="#card-{{ r.id }}" hx-swap="outerHTML" title="Разные песни или разные версии одной (лайв, ремикс) — обе остаются">Оставить обе</button>
         {% else %}
         <button class="btn" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"keep_both"}' hx-target="#card-{{ r.id }}" hx-swap="outerHTML">Разные версии, оставить обе</button>
         {% endif %}
