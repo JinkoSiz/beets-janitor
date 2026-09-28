@@ -21,6 +21,8 @@
   rollback    {"event_id"}
               откатить запись журнала: теги — к прежним значениям, файл —
               на прежнее место
+  download    {"release_id"}
+              отправить в downtify то, что в релизе решено скачать
   run         {"what": "nightly"}
               запустить ночную работу на следующем цикле
 
@@ -262,6 +264,13 @@ def do_rollback(con, lib, p):
     return msg
 
 
+def do_download(con, lib, p):
+    # файлы фонотеки не трогает: downtify кладёт скачанное в incoming, а
+    # импортирует его сторож обычным порядком
+    import download
+    return download.release(con, int(p["release_id"]))
+
+
 def do_run(con, lib, p):
     what = p.get("what", "nightly")
     if what != "nightly":
@@ -277,6 +286,7 @@ HANDLERS = {
     "import": do_import,
     "set_cover": do_set_cover,
     "rollback": do_rollback,
+    "download": do_download,
     "run": do_run,
 }
 

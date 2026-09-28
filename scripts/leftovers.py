@@ -70,7 +70,7 @@ def park(con, path, reason, sim=None, kept=None, artist=None, title=None):
     try:
         jdb.quarantine_add(con, dst, path, reason, similarity=None if sim is None else round(sim, 3),
                            kept_path=kept, title=title, artist=artist, album_id=0)
-        jdb.log_event(con, "leftovers", "quarantine", {"path": path}, {"path": dst, "why": reason})
+        jdb.log_event(con, "leftovers", "quarantine", {"path": path}, {"path": dst, "why": reason}, path=path)
     except Exception as e:
         print("   !! не записалось в базу: %s" % str(e)[:80])
     return dst
@@ -89,7 +89,8 @@ def import_anyway(con, path, sim, other):
         return False
     try:
         jdb.log_event(con, "leftovers", "import_version", {"path": path},
-                      {"similarity": None if sim is None else round(sim, 3), "alongside": other})
+                      {"similarity": None if sim is None else round(sim, 3), "alongside": other},
+                      path=path)
     except Exception:
         pass
     return True

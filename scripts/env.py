@@ -42,6 +42,13 @@ LIBRARY_CONFIG = os.path.join(CONFIG_DIR, "library.yaml")
 # читает пульт. Лежит рядом с базой beets — без неё она бессмысленна.
 JANITOR_DB = os.environ.get("JANITOR_DB", os.path.join(CONFIG_DIR, "janitor.db"))
 
+# База beets. Скрипты внутри beets-watch открывают её через beets, а пульт и
+# разбор дискографии читают напрямую, только на чтение.
+LIBRARY_DB = os.environ.get("LIBRARY_DB", os.path.join(CONFIG_DIR, "library.db"))
+
+# downtify: куда отправлять скачивание. Файлы он кладёт в incoming сам.
+DOWNTIFY_URL = os.environ.get("DOWNTIFY_URL", "http://downtify:8000").rstrip("/")
+
 # Служебные файлы. Держим рядом с базой: их содержимое бессмысленно без неё.
 JOURNAL = os.path.join(CONFIG_DIR, "applied.jsonl")
 RETRY_STATE = os.path.join(CONFIG_DIR, ".retried")

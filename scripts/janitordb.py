@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import env  # noqa: E402
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -140,7 +140,10 @@ CREATE TABLE IF NOT EXISTS artists (
     attention         TEXT,                          -- что не так, если не так
     last_checked      TEXT,
     last_release_date TEXT,
-    created_at        TEXT NOT NULL
+    created_at        TEXT NOT NULL,
+    deezer_name       TEXT,                          -- как исполнитель называется в Deezer
+    picture           TEXT,
+    info              TEXT                           -- json: кандидаты, если выбор неоднозначен
 );
 CREATE UNIQUE INDEX IF NOT EXISTS artists_spotify ON artists(spotify_id) WHERE spotify_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS artists_deezer ON artists(deezer_id) WHERE deezer_id IS NOT NULL;
@@ -155,10 +158,12 @@ CREATE TABLE IF NOT EXISTS releases (
     type          TEXT,                    -- album | single | ep | compilation
     release_date  TEXT,
     tracks_total  INTEGER,
-    status        TEXT NOT NULL DEFAULT 'new',  -- new | queued | downloading | verifying | in_library | skipped | rejected
-    counts        TEXT,                    -- json: have / dup / versions / ask / get
+    status        TEXT NOT NULL DEFAULT 'new',  -- known | new | queued | downloading | in_library | skipped
+    counts        TEXT,                    -- json: have / dup / version / ask / get
     found_at      TEXT NOT NULL,
     decided_at    TEXT,
+    cover         TEXT,
+    link          TEXT,
     UNIQUE(provider, provider_id)
 );
 CREATE INDEX IF NOT EXISTS releases_status ON releases(status, release_date);
@@ -174,6 +179,8 @@ CREATE TABLE IF NOT EXISTS release_tracks (
     verdict        TEXT,                   -- have_isrc | have_same | dup | version | ask | get
     library_item   INTEGER,                -- с какой дорожкой библиотеки совпала
     similarity     REAL,
+    decision       TEXT,                   -- решение из пульта: get | skip; перекрывает вердикт
+    info           TEXT,                   -- json: почему так, превью, путь в фонотеке, id в Spotify
     UNIQUE(release_id, provider_id)
 );
 CREATE INDEX IF NOT EXISTS release_tracks_isrc ON release_tracks(isrc);
@@ -217,10 +224,23 @@ def connect(path=None):
     return con
 
 
+# Колонки, появившиеся после первой версии схемы. Новые таблицы база догоняет
+# сама (CREATE ... IF NOT EXISTS), а новые колонки в старых таблицах —
+# только через ALTER, который и делается здесь, если колонки ещё нет.
+ADDED_COLUMNS = {
+    "artists": [("deezer_name", "TEXT"), ("picture", "TEXT"), ("info", "TEXT")],
+    "releases": [("cover", "TEXT"), ("link", "TEXT")],
+    "release_tracks": [("decision", "TEXT"), ("info", "TEXT")],
+}
+
+
 def migrate(con):
-    # новые таблицы добавляются через CREATE ... IF NOT EXISTS, поэтому
-    # старая база догоняет схему сама; версия — для будущих ALTER
     con.executescript(SCHEMA)
+    for table, cols in ADDED_COLUMNS.items():
+        have = {r[1] for r in con.execute("PRAGMA table_info(%s)" % table)}
+        for name, typ in cols:
+            if name not in have:
+                con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, typ))
     if int(meta_get(con, "schema_version") or 0) < SCHEMA_VERSION:
         meta_set(con, "schema_version", SCHEMA_VERSION)
 
@@ -370,6 +390,7 @@ DEFAULTS = {
     "follow_min_tracks": "3",
     "follow_enabled": "1",
     "auto_download": "0",
+    "follow_new_days": "60",
     "verify_limit": "300",
 }
 
