@@ -1,0 +1,11 @@
+{% load pult %}{% for e in rows %}{% with r=e.row %}
+<tr>
+  <td class="mono nowrap">{{ e.ts|ddmm_hm }}</td>
+  <td>{% if r.script == 'panel' %}пульт{% else %}{{ r.script }}{% endif %}</td>
+  <td><span class="op">{{ r.op }}</span></td>
+  <td class="diff">{% if e.title %}<b>{{ e.title }}</b>: {% elif e.path and e.changes %}<span class="sub path" style="margin-bottom:2px">{{ e.path }}</span>{% endif %}{% for k, b, a in e.changes %}{% if k != 'path' %}<span class="faint">{{ k }}</span> <del>{{ b|default:"пусто" }}</del> → <ins>{{ a|default:"пусто" }}</ins>{% else %}{{ b|default:e.path }} → <ins>{{ a }}</ins>{% endif %}{% if not forloop.last %}; {% endif %}{% empty %}{{ e.path }}{% endfor %}
+    {% if r.reverted_by %}<span class="pill" style="margin-left:6px">откачено</span>{% endif %}</td>
+  <td id="ja-{{ r.id }}">{% if e.can_rollback %}<button class="btn sm ghost" hx-post="/journal/{{ r.id }}/rollback" hx-target="#ja-{{ r.id }}">Откатить</button>{% endif %}</td>
+</tr>
+{% endwith %}{% endfor %}
+{% if next %}<tr id="j-more"><td colspan="5"><div class="more"><button class="btn sm" hx-get="?f={{ f }}&offset={{ next }}" hx-target="#j-more" hx-swap="outerHTML">Показать ещё</button></div></td></tr>{% endif %}

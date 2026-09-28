@@ -1,0 +1,68 @@
+{% load static pult %}<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>{% block title %}Пульт{% endblock %} · beets-janitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="{% static 'pult/panel.css' %}">
+<script src="{% static 'pult/htmx.min.js' %}" defer></script>
+<script src="{% static 'pult/panel.js' %}" defer></script>
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+<div class="app">
+  <aside class="side" aria-label="Разделы">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div>
+        <div class="brand-name">beets-janitor</div>
+        <div class="brand-sub">пульт фонотеки</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <div class="nav-group">
+        <div class="nav-label">Обзор</div>
+        <a href="/" {% if page == "summary" %}aria-current="page"{% endif %}>Сводка</a>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">Ждёт тебя</div>
+        <a href="/review/" {% if page == "review" %}aria-current="page"{% endif %}>Решения {% if navc.review %}<span class="badge hot">{{ navc.review|num }}</span>{% endif %}</a>
+        <a href="/releases/" {% if page == "releases" %}aria-current="page"{% endif %}>Новинки {% if navc.releases %}<span class="badge hot">{{ navc.releases|num }}</span>{% endif %}</a>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">Библиотека</div>
+        <a href="/artists/" {% if page == "artists" %}aria-current="page"{% endif %}>Исполнители {% if navc.artists %}<span class="badge">{{ navc.artists|num }}</span>{% endif %}</a>
+        <a href="/discography/" {% if page == "discography" %}aria-current="page"{% endif %}>Дискография</a>
+        <a href="/covers/" {% if page == "covers" %}aria-current="page"{% endif %}>Обложки {% if navc.covers %}<span class="badge">{{ navc.covers|num }}</span>{% endif %}</a>
+        <a href="/quarantine/" {% if page == "quarantine" %}aria-current="page"{% endif %}>Карантин {% if navc.quarantine %}<span class="badge">{{ navc.quarantine|num }}</span>{% endif %}</a>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">Система</div>
+        <a href="/journal/" {% if page == "journal" %}aria-current="page"{% endif %}>Журнал</a>
+        <a href="/settings/" {% if page == "settings" %}aria-current="page"{% endif %}>Настройки</a>
+      </div>
+    </nav>
+    <div class="side-foot">
+      {% if hb %}
+        <span class="live{% if hb.stale %} stale{% elif 'жду' not in hb.state %} busy{% endif %}">сторож: {{ hb.state|default:"—" }}</span>
+        {% if hb.stale %}<span>не отзывался с {{ hb.ts|when }}</span>
+        {% elif hb.next %}<span>следующая проверка через {{ hb.next|mins }}</span>
+        {% elif hb.next is not None %}<span>проверка вот-вот</span>
+        {% else %}<span>с {{ hb.ts|hm }}</span>{% endif %}
+      {% else %}
+        <span class="live stale">сторож ещё не отзывался</span>
+      {% endif %}
+      <form method="post" action="/logout">{% csrf_token %}<button class="btn ghost" type="submit">Выйти</button></form>
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

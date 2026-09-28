@@ -1,0 +1,15 @@
+{% load pult %}{% with r=c.row p=c.p cand=c.p.candidate %}
+<tr class="asis-row" id="asis-{{ r.id }}">
+  <td>{{ p.artist }} — {{ p.title }}<span class="sub">{{ p.path|short }}</span></td>
+  <td>{{ p.why }}</td>
+  <td>{% if cand %}{{ cand.artist }} — {{ cand.title }}<span class="sub dist">{{ cand.source|default:"?" }} · расстояние {{ cand.distance }}{% if cand.length and p.length %} · {{ cand.length|dur }} против {{ p.length|dur }}{% endif %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+  <td class="nowrap">
+    {% if r.status == 'open' %}
+      {% if cand.track_id %}<button class="btn sm" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"accept"}' hx-target="#asis-{{ r.id }}" hx-swap="outerHTML">Принять</button>{% endif %}
+      <button class="btn sm ghost" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"never"}' hx-target="#asis-{{ r.id }}" hx-swap="outerHTML">Больше не искать</button>
+    {% else %}
+      <span class="pill">{{ resolved_text|default:r.decision }}</span>
+    {% endif %}
+  </td>
+</tr>
+{% endwith %}

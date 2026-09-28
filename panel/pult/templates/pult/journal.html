@@ -1,0 +1,28 @@
+{% extends "pult/base.html" %}{% load pult %}
+{% block title %}Журнал{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="page-head">
+    <div>
+      <h1>Журнал</h1>
+      <p>Каждая правка тегов и каждое перемещение файла, со значением до и после. Запись можно откатить: теги вернутся к прежним значениям, файл — на прежнее место.</p>
+    </div>
+  </div>
+  <div class="chips">
+    <a class="chip" href="?f=all" aria-pressed="{% if f == 'all' %}true{% else %}false{% endif %}">Все</a>
+    <a class="chip" href="?f=tags" aria-pressed="{% if f == 'tags' %}true{% else %}false{% endif %}">Теги</a>
+    <a class="chip" href="?f=files" aria-pressed="{% if f == 'files' %}true{% else %}false{% endif %}">Файлы</a>
+    <a class="chip" href="?f=hand" aria-pressed="{% if f == 'hand' %}true{% else %}false{% endif %}">Из пульта</a>
+  </div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Когда</th><th>Кто</th><th>Что</th><th>Изменение</th><th></th></tr></thead>
+      <tbody>{% include "pult/_j_rows.html" %}</tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty"><b>Записей нет</b>Сюда пишет всё, что скрипты и пульт меняют в фонотеке.</div>
+  {% endif %}
+</section>
+{% endblock %}

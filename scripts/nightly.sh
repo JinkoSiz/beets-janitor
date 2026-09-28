@@ -36,6 +36,9 @@ LIBCFG=${CONFIG}/library.yaml
 STAMP=${CONFIG}/.last-lib-scan
 STATE=${CONFIG}/.incoming-state
 LOGS=${CONFIG}/nightly
+# папка набора: общая база, загрузки пульта, пульс и флаги (см. env.py)
+JDIR=${JANITOR_DIR:-$CONFIG/janitor}
+mkdir -p "$JDIR" 2>/dev/null
 
 AUDIO="-iname *.mp3 -o -iname *.flac -o -iname *.opus -o -iname *.m4a -o -iname *.ogg -o -iname *.wav -o -iname *.aac -o -iname *.wma"
 
@@ -92,6 +95,31 @@ jdb() {
   python3 "$SCRIPTS"/janitordb.py "$@" 2>/dev/null
 }
 
+setting() {
+  # setting КЛЮЧ ЗНАЧЕНИЕ_ИЗ_ОКРУЖЕНИЯ: заданное в пульте главнее окружения
+  v=$(jdb get "$1" "$2")
+  echo "${v:-$2}"
+}
+
+beat() {
+  # пульс для пульта: когда и чем занят сторож
+  echo "$(date '+%F %T')|$1" > "$JDIR/heartbeat" 2>/dev/null
+}
+
+nap() {
+  # пауза между проверками incoming. Действие из пульта не ждёт её конца:
+  # положив его в очередь, пульт касается файла wake
+  left=$1
+  while [ "$left" -gt 0 ]; do
+    if [ -f "$JDIR/wake" ]; then
+      rm -f "$JDIR/wake"
+      return 0
+    fi
+    sleep 10
+    left=$((left - 10))
+  done
+}
+
 step() {
   # step ИМЯ ТАЙМАУТ команда... — то же, что run, но шаг попадает в базу:
   # пульт строит сводку ночи из этих записей, а не из текстового лога
@@ -146,8 +174,10 @@ cleanup_one() {
 cleanup_residue() {
   # мусор (обложки, cue, логи) живёт JUNK_DAYS, убранные дубли — DUPES_DAYS,
   # чтобы был запас времени на откат, если выбран не тот экземпляр
-  find "$RESIDUE" -mindepth 1 -maxdepth 1 ! -name "_dupes" -mtime +$JUNK_DAYS -exec rm -rf {} + 2>/dev/null
-  find "$RESIDUE/_dupes" -type f -mtime +$DUPES_DAYS -delete 2>/dev/null
+  junk=$(setting junk_days "$JUNK_DAYS")
+  dupes=$(setting dupes_days "$DUPES_DAYS")
+  find "$RESIDUE" -mindepth 1 -maxdepth 1 ! -name "_dupes" -mtime +"$junk" -exec rm -rf {} + 2>/dev/null
+  find "$RESIDUE/_dupes" -type f -mtime +"$dupes" -delete 2>/dev/null
   find "$RESIDUE" -mindepth 1 -depth -type d -exec rmdir {} + 2>/dev/null
   # файлы, удалённые по сроку, помечаем в базе — иначе пульт показывал бы их
   # в карантине с кнопкой «Вернуть», которой нечего возвращать
@@ -226,6 +256,7 @@ nightly_body() {
   export JANITOR_RUN_ID
 
   echo "=== $(date '+%F %T') начало ночной работы"
+  beat "ночная работа"
   echo "-- было: треков $(beet ls -f x | wc -l), без MBID $(beet ls -f x 'mb_trackid::^$' | wc -l), альбомов $(beet ls -a -f x | wc -l)"
 
   echo "=== $(date '+%F %T') сканирование библиотеки"
@@ -261,6 +292,8 @@ nightly_body() {
   echo "-- стало: треков $(beet ls -f x | wc -l), без MBID $(beet ls -f x 'mb_trackid::^$' | wc -l), альбомов $(beet ls -a -f x | wc -l)"
   echo "-- Spotify: пауза $(cat "$CONFIG/.spotify-pace" 2>/dev/null), потрачено $(cat "$CONFIG/.spotify-budget" 2>/dev/null)"
   echo "-- отказов 429 за ночь: $(grep -c "^$(date '+%F').*429" "$CONFIG/net.log" 2>/dev/null)"
+  # объём фонотеки для сводки пульта: сам он её обходить не будет
+  jdb meta-set music_bytes "$(du -sb "$LIBRARY" 2>/dev/null | cut -f1)"
   echo "=== $(date '+%F %T') ночная работа завершена"
   [ -n "$RUN_ID" ] && jdb run-finish "$RUN_ID" ok
   unset JANITOR_RUN_ID
@@ -295,6 +328,7 @@ while true; do
   if [ "$n" -gt 0 ] && [ "$cur" = "$prev" ]; then
     if net_ok; then
       echo "=== $(date '+%F %T') incoming start, файлов: $n"
+      beat "разбираю incoming: $n файлов"
       RUN_ID=$(jdb run-start incoming)
       JANITOR_RUN_ID=$RUN_ID
       export JANITOR_RUN_ID
@@ -313,24 +347,32 @@ while true; do
     fi
   elif [ "$n" -gt 0 ]; then
     echo "=== $(date '+%F %T') incoming меняется ($cur), жду"
+    beat "incoming ещё наполняется: $n файлов"
   fi
 
-  # ночная работа: пробуем начиная с 05:00 и повторяем, пока не отработает.
-  # отметка о выполнении ставится ТОЛЬКО после успеха, иначе упавший канал
-  # в 05:00 отменял бы всю работу на сутки
+  # ночная работа: пробуем начиная с NIGHTLY_HOUR и повторяем, пока не
+  # отработает. Отметка о выполнении ставится ТОЛЬКО после успеха, иначе
+  # упавший канал в 05:00 отменял бы всю работу на сутки
   today=$(date '+%F')
+  hour=$(setting nightly_hour "$NIGHTLY_HOUR")
   # «Запустить сейчас» из пульта: флаг ставит apply_actions.py
-  if [ -f "$CONFIG/.run-now" ] && [ "$n" -eq 0 ]; then
-    rm -f "$CONFIG/.run-now"
+  if [ -f "$JDIR/run-now" ] && [ "$n" -eq 0 ]; then
+    rm -f "$JDIR/run-now"
     echo "=== $(date '+%F %T') ночная работа по кнопке из пульта"
+    beat "ночная работа (по кнопке)"
     nightly
   fi
-  if [ "$(date '+%H')" -ge "$NIGHTLY_HOUR" ] && [ "$(cat "$STAMP" 2>/dev/null)" != "$today" ]; then
+  if [ "$(date '+%H')" -ge "$hour" ] && [ "$(cat "$STAMP" 2>/dev/null)" != "$today" ]; then
     if [ "$n" -eq 0 ] && net_ok; then
+      beat "ночная работа"
       nightly
       echo "$today" > "$STAMP"
     fi
   fi
 
-  sleep "$INTERVAL"
+  interval=$(setting interval "$INTERVAL")
+  if [ "$n" -eq 0 ]; then
+    beat "жду, incoming пуст|$interval"
+  fi
+  nap "$interval"
 done

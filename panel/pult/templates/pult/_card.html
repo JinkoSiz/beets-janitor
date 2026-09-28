@@ -1,0 +1,80 @@
+{% load pult %}{% with r=c.row p=c.p %}
+<article class="card{% if r.status != 'open' %} resolved{% endif %}" id="card-{{ r.id }}">
+  <div class="card-head">
+    {% if c.verify %}
+      <div class="card-title">{{ p.title }} <span class="muted">— {{ p.artist }}{% if p.album %} · {{ p.album }}{% endif %}</span></div>
+      {% if r.status == 'open' %}<span class="pill {% if p.level == 'bad' %}bad{% else %}warn{% endif %}">{% if p.level == 'bad' %}похоже на подмену{% else %}серая зона{% endif %}</span>{% endif %}
+    {% else %}
+      <div class="card-title">{{ r.title }} <span class="muted">— {{ p.albumartist }}{% if p.album %} · {{ p.album }}{% endif %}</span></div>
+      {% if r.status == 'open' %}<span class="pill {% if r.kind == 'substitution' %}bad{% else %}warn{% endif %}">{% if r.kind == 'substitution' %}две копии, разный звук{% else %}не уверен{% endif %}</span>{% endif %}
+    {% endif %}
+  </div>
+
+  {% if r.status == 'open' %}
+  <div class="card-body">
+    {% if c.verify %}
+      <div class="players">
+        <div class="player">
+          <div class="player-top"><span class="player-role">в фонотеке</span><span class="player-meta">{{ p.length|dur }}</span></div>
+          <div class="player-row"><button class="play" aria-pressed="false" aria-label="Слушать файл из фонотеки"><svg viewBox="0 0 12 12"><path d="M2 1l9 5-9 5z"/></svg></button><div class="wave" data-seed="{{ r.id }}"></div></div>
+          <div class="player-meta">{{ p.path|short }}</div>
+          <audio preload="none" src="/audio/item/{{ p.item_id }}"></audio>
+        </div>
+        <div class="player ref">
+          <div class="player-top"><span class="player-role">эталон</span><span class="player-meta">0:30 · превью {% if p.ref.provider == 'deezer' %}Deezer{% else %}Spotify{% endif %}{% if p.ref.duration %} · трек {{ p.ref.duration|dur }}{% endif %}</span></div>
+          <div class="player-row"><button class="play" aria-pressed="false" aria-label="Слушать превью"><svg viewBox="0 0 12 12"><path d="M2 1l9 5-9 5z"/></svg></button><div class="wave" data-seed="{{ r.id|add:17 }}"></div></div>
+          <div class="player-meta">{% if p.ref.link %}<a href="{{ p.ref.link }}" target="_blank" rel="noopener">{{ p.ref.title|default:"трек у источника" }}</a>{% else %}{{ p.ref.title }}{% endif %}{% if p.ref.artists %} — {{ p.ref.artists|join:", " }}{% endif %}</div>
+          <audio preload="none" src="/audio/ref/{{ r.id }}"></audio>
+        </div>
+      </div>
+      <div class="meter" data-value="{{ p.similarity|pct100 }}" data-bad="{{ ref_bad|pct100 }}" data-ok="{{ ref_ok|pct100 }}" data-label="превью найдено в файле"></div>
+      {% if not c.exists %}<div class="missing">Дорожки уже нет в фонотеке — вопрос можно снять.</div>{% endif %}
+      <div class="hint">{% if p.level == 'bad' %}Превью источника в файле не нашлось. Скорее всего, под этими тегами лежит другая песня — так downtify иногда приносит чужой трек с YouTube Music.{% else %}Сходство между «та же запись» и «другая песня». Так бывает у sped up, ремастеров и радиоверсий — послушай и реши.{% endif %}{% if p.ref.duration and p.length %} Длина у источника {{ p.ref.duration|dur }}, у файла {{ p.length|dur }}.{% endif %}</div>
+      <div class="actions">
+        {% if c.exists %}
+        <button class="btn primary" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"quarantine"}' hx-target="#card-{{ r.id }}" hx-swap="outerHTML">В карантин</button>
+        <button class="btn" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"keep"}' hx-target="#card-{{ r.id }}" hx-swap="outerHTML">Это правильный трек</button>
+        {% else %}
+        <button class="btn" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"dismiss"}' hx-target="#card-{{ r.id }}" hx-swap="outerHTML">Снять вопрос</button>
+        {% endif %}
+      </div>
+      {% if c.exists %}
+      <form class="upload-row" hx-post="/review/{{ r.id }}/replace" hx-encoding="multipart/form-data" hx-target="#card-{{ r.id }}" hx-swap="outerHTML">
+        <span class="muted" style="font-size:12.5px">Нашёл правильный файл сам?</span>
+        <input type="file" name="file" accept="audio/*,.mp3,.flac,.m4a,.opus,.ogg,.wav" required aria-label="Файл на замену">
+        <button class="btn sm" type="submit">Заменить звук, теги оставить <span class="htmx-indicator spin"></span></button>
+      </form>
+      {% endif %}
+
+    {% else %}
+      <div class="players">
+        {% for f in c.files %}
+        <div class="player">
+          <div class="player-top"><span class="player-role">копия {% if forloop.first %}A{% else %}B{% endif %}</span><span class="player-meta">{{ f.length|dur }} · {{ f.format }} {{ f.bitrate }}</span></div>
+          <div class="player-row"><button class="play" aria-pressed="false" aria-label="Слушать копию {% if forloop.first %}A{% else %}B{% endif %}"><svg viewBox="0 0 12 12"><path d="M2 1l9 5-9 5z"/></svg></button><div class="wave" data-seed="{{ r.id|add:forloop.counter }}"></div></div>
+          <div class="player-meta">{{ f.path|short }}</div>
+          {% if f.exists %}<audio preload="none" src="/audio/item/{{ f.item_id }}"></audio>{% else %}<div class="missing">этой копии уже нет в фонотеке</div>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      <div class="meter" data-mode="pair" data-value="{{ p.similarity|pct100 }}"></div>
+      {% if p.hint %}<div class="hint">{{ p.hint }}</div>{% endif %}
+      <div class="actions">
+        {% if c.exists %}
+        <button class="btn primary" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"keep_a"}' hx-target="#card-{{ r.id }}" hx-swap="outerHTML">Оставить A</button>
+        <button class="btn primary" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"keep_b"}' hx-target="#card-{{ r.id }}" hx-swap="outerHTML">Оставить B</button>
+        {% endif %}
+        {% if r.kind == 'substitution' %}
+        <button class="btn" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"different"}' hx-target="#card-{{ r.id }}" hx-swap="outerHTML">Это разные песни</button>
+        {% else %}
+        <button class="btn" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"keep_both"}' hx-target="#card-{{ r.id }}" hx-swap="outerHTML">Разные версии, оставить обе</button>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="resolved-msg"><span>Решено: {{ resolved_text|default:r.decision }}.</span>
+    <button class="btn sm ghost" hx-post="/review/{{ r.id }}/undo" hx-target="#card-{{ r.id }}" hx-swap="outerHTML">Вернуть</button></div>
+  {% endif %}
+</article>
+{% endwith %}

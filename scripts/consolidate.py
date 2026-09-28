@@ -926,7 +926,22 @@ def step_broken(lib, stats):
             stats["broken"] += 1
 
 
+def load_thresholds():
+    """Пороги из настроек пульта. Без базы — значения из кода выше."""
+    global FP_SAME, FP_SAME_SHORT, FP_SAME_LENDIFF, FP_MAYBE, FP_ALIEN
+    con = db()
+    if con is None:
+        return
+    try:
+        FP_SAME = FP_SAME_LENDIFF = float(jdb.setting(con, "fp_same"))
+        FP_SAME_SHORT = float(jdb.setting(con, "fp_same_short"))
+        FP_MAYBE = FP_ALIEN = float(jdb.setting(con, "fp_ask"))
+    except (TypeError, ValueError):
+        pass
+
+
 def main():
+    load_thresholds()
     lib = retry.open_library()
     stats = collections.Counter()
     items = [it for it in lib.items("") if os.path.isfile(path_of(it))]

@@ -1,0 +1,11 @@
+{% load pult %}{% for q in rows %}{% with r=q.row %}
+<tr>
+  <td><div class="player" style="padding:0;border:0;background:none;gap:4px"><div class="player-row" style="gap:8px">{% if q.exists %}<button class="play" type="button" aria-pressed="false" aria-label="Слушать"><svg viewBox="0 0 12 12"><path d="M2 1l9 5-9 5z"/></svg></button>{% endif %}<span class="path">{{ r.original_path|short }}</span></div>{% if q.exists %}<audio preload="none" src="/audio/q/{{ r.id }}"></audio>{% endif %}</div></td>
+  <td>{{ q.reason_text }}{% if r.similarity %}, <b>{{ r.similarity|pct }}</b>{% endif %}{% if r.kept_path %}<span class="sub">остался {{ r.kept_path|short }}</span>{% elif q.from_incoming %}<span class="sub">не взят из incoming</span>{% endif %}</td>
+  <td class="mono">{{ q.moved|ddmm }}</td>
+  <td>{% if q.left is not None %}<div class="left-days"><span class="num">{% if q.left < 1 %}сегодня{% else %}{{ q.left|floatformat:0 }} дн.{% endif %}</span><div class="bar"><i style="width:{{ q.used_pct }}%"></i></div></div>{% endif %}</td>
+  <td class="mono">{{ r.size|size }}</td>
+  <td id="qa-{{ r.id }}">{% if not q.exists %}<span class="pill">удалён</span>{% elif r.reason == 'broken' %}<span class="faint" style="font-size:12px">перекачай</span>{% else %}<button class="btn sm" hx-post="/quarantine/{{ r.id }}/restore" hx-target="#qa-{{ r.id }}">{% if q.from_incoming %}Импортировать{% else %}Вернуть{% endif %}</button>{% endif %}</td>
+</tr>
+{% endwith %}{% endfor %}
+{% if next %}<tr id="q-more"><td colspan="6"><div class="more"><button class="btn sm" hx-get="?f={{ f }}&offset={{ next }}" hx-target="#q-more" hx-swap="outerHTML">Показать ещё</button></div></td></tr>{% endif %}

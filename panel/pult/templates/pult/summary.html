@@ -1,0 +1,86 @@
+{% extends "pult/base.html" %}{% load pult l10n %}
+{% block title %}Сводка{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="page-head">
+    <div>
+      <h1>Сводка</h1>
+      {% if s.run %}
+        <p>Последняя ночная работа: {{ s.run.start|when }}{% if s.run.end %}–{{ s.run.end|hm }}, {{ s.run.mins }} мин{% else %}, ещё идёт{% endif %}{% if s.run.failed %}, <b>{{ s.run.failed }} {{ s.run.failed|plural:"шаг,шага,шагов" }} с ошибкой</b>{% else %}, без ошибок{% endif %}. Ниже — что осталось на тебя и что сделано.</p>
+      {% else %}
+        <p>Ночная работа ещё не записывалась в базу — сводка появится после первой ночи.</p>
+      {% endif %}
+    </div>
+    <div class="row">
+      {% if s.run and s.run.end %}<span class="pill {% if s.run.failed %}warn{% else %}ok{% endif %}">ночная работа {% if s.run.failed %}с ошибками{% else %}выполнена{% endif %}</span>{% endif %}
+      <button class="btn sm" data-confirm="run">Запустить сейчас</button>
+    </div>
+  </div>
+  <div class="confirm" id="confirm-run"><span>Запустить ночную цепочку сейчас? Пока она идёт, импорт из incoming ждёт.</span>
+    <button class="btn sm primary" hx-post="/run" hx-vals='{"what":"nightly"}' hx-swap="none" data-close-confirm>Да, запустить</button>
+    <button class="btn sm ghost" data-close-confirm>Нет</button></div>
+
+  <div class="attention">
+    <a class="att{% if s.reviews %} hot{% endif %}" href="/review/"><span class="att-n">{{ s.reviews|num }}</span><span>{{ s.reviews|plural:"решение ждёт,решения ждут,решений ждут" }} тебя<small>подмен {{ s.subs }}, спорных дублей {{ s.dups }}, «как есть» {{ s.asis }}</small></span></a>
+    <a class="att{% if s.new_releases %} hot{% endif %}" href="/releases/?f=wait"><span class="att-n">{{ s.new_releases|num }}</span><span>{{ s.new_releases|plural:"новый релиз,новых релиза,новых релизов" }}<small>{{ s.new_names|default:"новинок пока нет" }}</small></span></a>
+    <a class="att{% if s.expiring %} warn{% endif %}" href="/quarantine/"><span class="att-n">{{ s.expiring|num }}</span><span>{{ s.expiring|plural:"файл удалится,файла удалятся,файлов удалятся" }} из карантина<small>в ближайшие два дня, если не вернуть</small></span></a>
+    {% if s.covers %}<a class="att" href="/covers/"><span class="att-n">{{ s.covers|num }}</span><span>без обложки<small>не нашлось ни в одном каталоге</small></span></a>{% endif %}
+  </div>
+
+  <div class="panel lib-strip" aria-label="Фонотека">
+    <div><b>{{ s.lib.tracks|num }}</b><span>{{ s.lib.tracks|plural:"трек,трека,треков" }}</span></div>
+    <div><b>{{ s.lib.albums|num }}</b><span>{{ s.lib.albums|plural:"альбом,альбома,альбомов" }}</span></div>
+    <div><b>{{ s.lib.artists|num }}</b><span>{{ s.lib.artists|plural:"исполнитель,исполнителя,исполнителей" }}</span></div>
+    {% if s.music_bytes %}<div><b>{{ s.music_bytes|size }}</b><span>на диске</span></div>{% endif %}
+    {% if s.art_pct is not None %}<div><b>{{ s.art_pct }}%</b><span>с обложкой</span></div>{% endif %}
+    <div><b>{{ s.lib.asis|num }}</b><span>лежат «как есть»</span></div>
+    <div><b>{{ s.checked|num }}</b><span>сверено по превью</span></div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="section-head panel-pad" style="padding-bottom:10px"><h2>Ночная цепочка</h2><span class="muted" style="font-size:12.5px">в порядке выполнения</span></div>
+      {% if s.run and s.run.steps %}
+      <ol class="chain">
+        {% for st in s.run.steps %}
+        <li><span class="dot{% if st.status == 'failed' %} bad{% elif st.status != 'ok' %} warn{% endif %}"></span><span class="step-name">{{ st.name }}</span><span class="step-res">{% if st.text %}{{ st.text|safe }}{% elif st.status == 'running' %}идёт{% elif st.status != 'ok' %}{{ st.status }}{% else %}<span class="faint">готово</span>{% endif %}<span class="step-bar"><i style="width:{{ st.bar|unlocalize }}%"></i></span></span><span class="step-t">{{ st.secs|secs_mmss }}</span></li>
+        {% endfor %}
+      </ol>
+      {% else %}
+      <div class="panel-pad muted" style="padding-top:0">Шагов ещё нет.</div>
+      {% endif %}
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+      <div class="panel budget">
+        <div class="section-head"><h2>Spotify за сутки</h2>{% if s.spotify.breaker %}<span class="pill bad">пауза до {{ s.spotify.breaker_until|hm }}</span>{% else %}<span class="pill ok">предохранитель выключен</span>{% endif %}</div>
+        <div>
+          <div class="section-head" style="margin-bottom:6px"><span class="num"><b>{{ s.spotify.used|num }}</b> из {{ s.spotify.daily|num }} запросов</span><span class="faint num">{{ s.spotify.pct }}%</span></div>
+          <div class="bar" role="img" aria-label="Потрачено {{ s.spotify.used }} из {{ s.spotify.daily }}"><i style="width:{{ s.spotify.pct|unlocalize }}%"></i></div>
+        </div>
+        <dl class="kv">
+          <dt>пауза между запросами</dt><dd>{{ s.spotify.pace }} с</dd>
+          <dt>отказов 429 сегодня</dt><dd>{{ s.spotify.r429 }}</dd>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <div class="section-head panel-pad" style="padding-bottom:10px"><h2>Последние импорты</h2><a href="/journal/" style="font-size:12.5px">весь журнал</a></div>
+        {% if s.imports %}
+        <div class="table-wrap" style="border:0;border-top:1px solid var(--line);border-radius:0 0 var(--r) var(--r)">
+          <table style="min-width:420px"><tbody>
+            {% for i in s.imports %}
+            <tr><td>{{ i.artist }} — {{ i.title }}<span class="sub">{{ i.source|default:"как есть" }}</span></td>
+              <td>{% if i.similarity is not None %}<span class="pill {{ i.similarity|pctcls }}">{{ i.similarity|pct }}</span>{% elif i.verdict %}<span class="pill">{% if i.verdict == 'no_ref' %}не с чем сверить{% elif i.verdict == 'no_preview' %}нет превью{% else %}{{ i.verdict }}{% endif %}</span>{% else %}<span class="pill">ждёт сверки</span>{% endif %}</td>
+              <td class="mono muted">{{ i.ts|ddmm }}</td></tr>
+            {% endfor %}
+          </tbody></table>
+        </div>
+        {% else %}
+        <div class="panel-pad muted" style="padding-top:0">Импортов с момента запуска пульта ещё не было.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

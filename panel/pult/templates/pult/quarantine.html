@@ -1,0 +1,35 @@
+{% extends "pult/base.html" %}{% load pult %}
+{% block title %}Карантин{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="page-head">
+    <div>
+      <h1>Карантин</h1>
+      <p>Ничего не удаляется сразу. Копии лежат здесь {{ sum.dupes_days }} {{ sum.dupes_days|plural:"день,дня,дней" }}, потом уходят насовсем. Всё, что убрали зря, возвращается на прежнее место одной кнопкой.</p>
+    </div>
+  </div>
+  <div class="panel q-summary">
+    <div><b>{{ sum.total|num }}</b> <span class="muted">{{ sum.total|plural:"файл,файла,файлов" }}</span></div>
+    <div><b>{{ sum.bytes|size }}</b></div>
+    <div><b>{{ sum.expiring|num }}</b> <span class="muted">удалятся в ближайшие два дня</span></div>
+    <span class="pill">хранить {{ sum.dupes_days }} дн.</span>
+  </div>
+  <div class="chips">
+    <a class="chip" href="?f=all" aria-pressed="{% if f == 'all' %}true{% else %}false{% endif %}">Все <span class="n">{{ sum.total }}</span></a>
+    <a class="chip" href="?f=dup" aria-pressed="{% if f == 'dup' %}true{% else %}false{% endif %}">Копии <span class="n">{{ sum.by.duplicate|default:0 }}</span></a>
+    <a class="chip" href="?f=sub" aria-pressed="{% if f == 'sub' %}true{% else %}false{% endif %}">Подмены <span class="n">{{ sum.by.substitution|default:0 }}</span></a>
+    <a class="chip" href="?f=broken" aria-pressed="{% if f == 'broken' %}true{% else %}false{% endif %}">Битые <span class="n">{{ sum.by.broken|default:0 }}</span></a>
+    {% if sum.by.import_failed %}<a class="chip" href="?f=failed" aria-pressed="{% if f == 'failed' %}true{% else %}false{% endif %}">Не импортировались <span class="n">{{ sum.by.import_failed }}</span></a>{% endif %}
+  </div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Файл</th><th>Почему убран</th><th>Убран</th><th>Осталось</th><th>Размер</th><th></th></tr></thead>
+      <tbody id="q-rows">{% include "pult/_q_rows.html" %}</tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty"><b>Карантин пуст</b>Сюда попадают убранные копии, подмены и битые файлы.</div>
+  {% endif %}
+</section>
+{% endblock %}

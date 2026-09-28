@@ -1,0 +1,6 @@
+{% load pult %}
+<div class="cov">
+  <div class="drop filled" style="cursor:default"><span></span></div>
+  <div><div class="cov-title">{{ p.album|default:"без альбома" }}</div><div class="cov-meta">{{ p.artist }} · {{ w }}×{{ h }}</div></div>
+  <span class="pill ok">ляжет в {{ p.count }} {{ p.count|plural:"файл,файла,файлов" }} на ближайшем цикле</span>
+</div>

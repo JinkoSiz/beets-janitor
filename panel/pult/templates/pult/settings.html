@@ -1,0 +1,55 @@
+{% extends "pult/base.html" %}{% load pult %}
+{% block title %}Настройки{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="page-head">
+    <div>
+      <h1>Настройки</h1>
+      <p>Пороги и расписание. Сохраняется сразу, сторож подхватывает на следующем цикле. Пути задаются окружением контейнера и здесь только показываются.</p>
+    </div>
+  </div>
+  <div class="settings">
+    <div class="panel set">
+      <h2>Расписание</h2>
+      <div class="set-row"><span>Ночная работа не раньше</span><span class="row"><input type="number" name="value" value="{{ v.nightly_hour }}" min="0" max="23" aria-label="Час запуска" hx-post="/settings/set" hx-vals='{"key":"nightly_hour"}' hx-trigger="change" hx-swap="none"><span class="muted">:00</span></span></div>
+      <div class="set-row"><span>Проверять incoming каждые</span><span class="row"><input type="number" name="value" value="{{ v.interval }}" min="30" max="3600" aria-label="Интервал, секунд" hx-post="/settings/set" hx-vals='{"key":"interval"}' hx-trigger="change" hx-swap="none"><span class="muted">с</span></span></div>
+      <div class="set-row"><span>Искать новинки исполнителей</span><label class="switch"><input type="checkbox" {% if follow_enabled %}checked{% endif %} aria-label="Искать новинки" hx-post="/flag" hx-vals='js:{key:"follow_enabled", value: event.target.checked ? 1 : 0}' hx-swap="none"><span></span></label></div>
+      <div class="set-row"><span>Новинки качать сразу, без подтверждения</span><label class="switch"><input type="checkbox" {% if auto_download %}checked{% endif %} aria-label="Качать сразу" hx-post="/flag" hx-vals='js:{key:"auto_download", value: event.target.checked ? 1 : 0}' hx-swap="none"><span></span></label></div>
+    </div>
+    <div class="panel set">
+      <h2>Отпечаток: когда копии одинаковы</h2>
+      <p>Для consolidate: пары с тем же альбомом, названием и близкой длиной. Разные песни дают около 50%, тот же трек с другим мастерингом — 70–85%.</p>
+      <div class="set-row"><span>Та же запись, от</span><span class="row"><input type="number" name="value" value="{{ v.fp_same }}" aria-label="Порог та же запись" hx-post="/settings/set" hx-vals='{"key":"fp_same"}' hx-trigger="change" hx-swap="none"><span class="muted">%</span></span></div>
+      <div class="set-row"><span>Короткие треки, до 90 с, от</span><span class="row"><input type="number" name="value" value="{{ v.fp_same_short }}" aria-label="Порог для коротких" hx-post="/settings/set" hx-vals='{"key":"fp_same_short"}' hx-trigger="change" hx-swap="none"><span class="muted">%</span></span></div>
+      <div class="set-row"><span>Спросить меня, от</span><span class="row"><input type="number" name="value" value="{{ v.fp_ask }}" aria-label="Порог серой зоны" hx-post="/settings/set" hx-vals='{"key":"fp_ask"}' hx-trigger="change" hx-swap="none"><span class="muted">%</span></span></div>
+    </div>
+    <div class="panel set">
+      <h2>Сверка по превью</h2>
+      <p>Скачанное сравнивается с 30-секундным превью Spotify или Deezer. Верные записи дают 92–98%, чужие песни — 53–56%.</p>
+      <div class="set-row"><span>Принять без вопросов, от</span><span class="row"><input type="number" name="value" value="{{ v.ref_ok }}" aria-label="Порог принятия" hx-post="/settings/set" hx-vals='{"key":"ref_ok"}' hx-trigger="change" hx-swap="none"><span class="muted">%</span></span></div>
+      <div class="set-row"><span>Считать подменой, ниже</span><span class="row"><input type="number" name="value" value="{{ v.ref_bad }}" aria-label="Порог подмены" hx-post="/settings/set" hx-vals='{"key":"ref_bad"}' hx-trigger="change" hx-swap="none"><span class="muted">%</span></span></div>
+      <div class="set-row"><span>Сверять за ночь, дорожек</span><span class="row"><input type="number" name="value" value="{{ v.verify_limit }}" style="width:96px" aria-label="Лимит сверки" hx-post="/settings/set" hx-vals='{"key":"verify_limit"}' hx-trigger="change" hx-swap="none"></span></div>
+    </div>
+    <div class="panel set">
+      <h2>Карантин и новинки</h2>
+      <div class="set-row"><span>Хранить копии</span><span class="row"><input type="number" name="value" value="{{ v.dupes_days }}" aria-label="Дней хранить копии" hx-post="/settings/set" hx-vals='{"key":"dupes_days"}' hx-trigger="change" hx-swap="none"><span class="muted">дн.</span></span></div>
+      <div class="set-row"><span>Хранить мусор и битые</span><span class="row"><input type="number" name="value" value="{{ v.junk_days }}" aria-label="Дней хранить мусор" hx-post="/settings/set" hx-vals='{"key":"junk_days"}' hx-trigger="change" hx-swap="none"><span class="muted">дн.</span></span></div>
+      <div class="set-row"><span>Следить за исполнителем от</span><span class="row"><input type="number" name="value" value="{{ v.follow_min_tracks }}" aria-label="Минимум треков" hx-post="/settings/set" hx-vals='{"key":"follow_min_tracks"}' hx-trigger="change" hx-swap="none"><span class="muted">треков</span></span></div>
+      <div class="set-row"><span>Новинкой считать релиз не старше</span><span class="row"><input type="number" name="value" value="{{ v.follow_new_days }}" aria-label="Дней" hx-post="/settings/set" hx-vals='{"key":"follow_new_days"}' hx-trigger="change" hx-swap="none"><span class="muted">дн.</span></span></div>
+    </div>
+    <div class="panel set">
+      <h2>Окружение</h2>
+      <dl class="envlist">{% for k, val in env %}<dt>{{ k }}</dt><dd>{{ val }}</dd>{% endfor %}</dl>
+    </div>
+    <div class="panel set">
+      <h2>Запустить сейчас</h2>
+      <p>Ночная цепочка целиком занимает от двадцати минут до часа. Пока идёт, импорт из incoming ждёт.</p>
+      <div class="actions">
+        <button class="btn primary" data-confirm="run-all">Вся ночная работа</button>
+        <button class="btn" hx-post="/run" hx-vals='{"what":"verify"}' hx-swap="none">Сверить новые импорты</button>
+      </div>
+      <div class="confirm" id="confirm-run-all"><span>Запустить цепочку сейчас?</span><button class="btn sm primary" hx-post="/run" hx-vals='{"what":"nightly"}' hx-swap="none" data-close-confirm>Да, запустить</button><button class="btn sm ghost" data-close-confirm>Нет</button></div>
+    </div>
+  </div>
+</section>
+{% endblock %}

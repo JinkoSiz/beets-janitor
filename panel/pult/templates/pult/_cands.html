@@ -1,0 +1,15 @@
+{% load pult %}
+{% for c in cands %}
+<div class="cand{% if c.exact and c.overlap %} right{% elif not c.exact and not c.overlap %} wrong{% endif %}">
+  <div class="avatar" style="background:{{ c.name|color }}">{% if c.picture %}<img src="{{ c.picture }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}{{ c.name|initials }}{% endif %}</div>
+  <div><b>{{ c.name }}</b> <span class="faint">· Deezer · {{ c.albums|default:0 }} {{ c.albums|default:0|plural:"релиз,релиза,релизов" }} · {{ c.fans|default:0|num }} {{ c.fans|default:0|plural:"поклонник,поклонника,поклонников" }}</span>
+    <div class="why">{% if c.overlap %}<b>{{ c.overlap }}</b> из популярных треков уже есть у тебя — это точно он{% elif c.exact %}имя совпало, но общих треков с фонотекой нет{% else %}похоже по написанию, общих треков нет{% endif %}</div></div>
+  {% if mode == "disco" %}
+  <button class="btn sm{% if c.overlap or forloop.first %} primary{% else %} ghost{% endif %}" hx-post="/discography/start" hx-vals='{"deezer_id":"{{ c.id }}","name":"{{ c.name|escapejs }}","picture":"{{ c.picture|default:""|escapejs }}"}' hx-target="#disco-job" hx-swap="innerHTML">Разобрать</button>
+  {% else %}
+  <button class="btn sm{% if c.overlap or forloop.first %} primary{% else %} ghost{% endif %}" hx-post="/artists/add" hx-vals='{"deezer_id":"{{ c.id }}","name":"{{ c.name|escapejs }}","picture":"{{ c.picture|default:""|escapejs }}"}' hx-swap="none">Следить</button>
+  {% endif %}
+</div>
+{% empty %}
+<p class="muted">В Deezer по запросу «{{ q }}» никого не нашлось.</p>
+{% endfor %}

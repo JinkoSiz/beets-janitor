@@ -1,0 +1,74 @@
+{% extends "pult/base.html" %}{% load pult %}
+{% block title %}Исполнители{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="page-head">
+    <div>
+      <h1>Исполнители</h1>
+      <p>За кем следит сторож. Список собирается сам из фонотеки, дополняется руками, лишних можно выключить.</p>
+    </div>
+  </div>
+
+  <div class="panel rule">
+    <p>Следить автоматически за теми, у кого в фонотеке не меньше</p>
+    <input type="number" name="value" value="{{ min_tracks }}" min="1" max="200" aria-label="Минимум треков"
+      hx-post="/settings/set" hx-vals='{"key":"follow_min_tracks"}' hx-trigger="change" hx-swap="none">
+    <p>треков.</p>
+    <span class="pill">слежу за {{ counts.follow|num }}</span>
+    {% if counts.off %}<span class="pill">выключено {{ counts.off }}</span>{% endif %}
+    {% if counts.fix %}<span class="pill warn">уточнить {{ counts.fix }}</span>{% endif %}
+  </div>
+
+  <div class="panel addbox">
+    <div class="section-head"><h2>Добавить исполнителя</h2><span class="muted" style="font-size:12.5px">поиск по имени врёт, поэтому показываю, чем кандидат подтверждён</span></div>
+    <form class="addrow" hx-get="/artists/search" hx-target="#cands" hx-indicator="#cands-spin">
+      <input type="search" name="q" placeholder="Имя исполнителя" aria-label="Имя исполнителя" required>
+      <input type="hidden" name="mode" value="follow">
+      <button class="btn" type="submit">Найти <span class="htmx-indicator spin" id="cands-spin"></span></button>
+    </form>
+    <div id="cands" class="cands"></div>
+  </div>
+
+  <div class="chips">
+    <a class="chip" href="?f=all" aria-pressed="{% if f == 'all' %}true{% else %}false{% endif %}">Все</a>
+    <a class="chip" href="?f=new" aria-pressed="{% if f == 'new' %}true{% else %}false{% endif %}">С новинками <span class="n">{{ counts.new }}</span></a>
+    <a class="chip" href="?f=fix" aria-pressed="{% if f == 'fix' %}true{% else %}false{% endif %}">Требуют внимания <span class="n">{{ counts.fix }}</span></a>
+    <a class="chip" href="?f=off" aria-pressed="{% if f == 'off' %}true{% else %}false{% endif %}">Выключены <span class="n">{{ counts.off }}</span></a>
+  </div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Исполнитель</th><th>Почему в списке</th><th>Deezer</th><th>Последний релиз</th><th>Проверен</th><th>Следить</th></tr></thead>
+      <tbody>
+        {% for a in rows %}{% with r=a.row %}
+        <tr id="artist-{{ r.id }}">
+          <td><div class="who"><div class="avatar" style="background:{{ r.name|color }}">{% if r.picture %}<img src="{{ r.picture }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}{{ r.name|initials }}{% endif %}</div><b>{{ r.name }}</b></div></td>
+          <td>{% if r.source == 'manual' %}вручную{% else %}авто · {{ r.library_tracks }} {{ r.library_tracks|plural:"трек,трека,треков" }}{% endif %}</td>
+          <td>{% if r.deezer_id %}<a class="pill ok" href="https://www.deezer.com/artist/{{ r.deezer_id }}" target="_blank" rel="noopener" style="text-decoration:none">{{ r.deezer_name|default:"найден" }}</a>{% elif r.attention %}<span class="pill warn">{{ r.attention }}</span>{% else %}<span class="pill">ищу ночью</span>{% endif %}</td>
+          <td>{% if r.last_title %}{{ r.last_title }}<span class="sub">{{ r.last_date|rudate }}{% if r.new_count %} · <b style="color:var(--accent)">новое</b>{% endif %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="mono muted">{{ r.last_checked|when }}</td>
+          <td><label class="switch"><input type="checkbox" {% if r.follow and not r.excluded %}checked{% endif %} aria-label="Следить за {{ r.name }}"
+            hx-post="/artists/{{ r.id }}/follow" hx-vals='js:{value: event.target.checked ? 1 : 0}' hx-swap="none"><span></span></label></td>
+        </tr>
+        {% if a.cands %}
+        <tr class="sub-of"><td colspan="6">
+          <div class="cands">
+            {% for c in a.cands %}
+            <div class="cand{% if c.overlap %} right{% else %} wrong{% endif %}">
+              <div class="avatar" style="background:{{ c.name|color }}">{% if c.picture %}<img src="{{ c.picture }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}{{ c.name|initials }}{% endif %}</div>
+              <div><b>{{ c.name }}</b> <span class="faint">· Deezer · {{ c.albums|default:0 }} релизов</span><div class="why">{% if c.overlap %}{{ c.overlap }} из популярных треков уже есть у тебя{% else %}ни одного общего трека с фонотекой{% endif %}</div></div>
+              <button class="btn sm{% if c.overlap %} primary{% else %} ghost{% endif %}" hx-post="/artists/{{ r.id }}/pick" hx-vals='{"deezer_id":"{{ c.id }}","name":"{{ c.name|escapejs }}","picture":"{{ c.picture|default:""|escapejs }}"}' hx-swap="none">Это он</button>
+            </div>
+            {% endfor %}
+          </div>
+        </td></tr>
+        {% endif %}
+        {% endwith %}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty"><b>Список пуст</b>{% if f == 'all' %}Исполнители из фонотеки появятся после первой ночной проверки новинок.{% else %}В этом разделе никого нет.{% endif %}</div>
+  {% endif %}
+</section>
+{% endblock %}

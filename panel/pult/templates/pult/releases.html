@@ -1,0 +1,30 @@
+{% extends "pult/base.html" %}{% load pult %}
+{% block title %}Новинки{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="page-head">
+    <div>
+      <h1>Новинки</h1>
+      <p>Раз в сутки сторож смотрит релизы у {{ artists_n|num }} {{ artists_n|plural:"исполнителя,исполнителей,исполнителей" }} из списка. То, что у тебя уже есть, отсеивается до скачивания — так же, как на странице <a href="/discography/">«Дискография»</a>. Всё скачанное сверяется с превью прежде, чем попасть в плеер.</p>
+    </div>
+    <div class="row">
+      <label class="row" style="gap:8px;font-size:13px"><span class="switch"><input type="checkbox" {% if auto %}checked{% endif %}
+        hx-post="/flag" hx-vals='js:{key:"auto_download", value: event.target.checked ? 1 : 0}' hx-swap="none"><span></span></span>качать сразу, без подтверждения</label>
+    </div>
+  </div>
+  <div class="chips">
+    <a class="chip" href="?f=all" aria-pressed="{% if f == 'all' %}true{% else %}false{% endif %}">Все <span class="n">{{ counts.all }}</span></a>
+    <a class="chip" href="?f=wait" aria-pressed="{% if f == 'wait' %}true{% else %}false{% endif %}">Ждут решения <span class="n">{{ counts.wait }}</span></a>
+    <a class="chip" href="?f=work" aria-pressed="{% if f == 'work' %}true{% else %}false{% endif %}">В работе <span class="n">{{ counts.work }}</span></a>
+    <a class="chip" href="?f=done" aria-pressed="{% if f == 'done' %}true{% else %}false{% endif %}">В фонотеке <span class="n">{{ counts.done }}</span></a>
+    <a class="chip" href="?f=skip" aria-pressed="{% if f == 'skip' %}true{% else %}false{% endif %}">Пропущены <span class="n">{{ counts.skip }}</span></a>
+  </div>
+  {% if rels %}
+  <div class="releases">
+    {% for x in rels %}{% include "pult/_release.html" %}{% endfor %}
+  </div>
+  {% else %}
+  <div class="empty"><b>Здесь пока пусто</b>Новинки появляются после ночной проверки исполнителей. При первой проверке прежние релизы только запоминаются, чтобы в новинки не высыпалась вся дискография — недостающее из старого ищи в «Дискографии».</div>
+  {% endif %}
+</section>
+{% endblock %}

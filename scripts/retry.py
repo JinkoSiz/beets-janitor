@@ -324,10 +324,15 @@ def main():
         albums.append(p)
 
     lib = open_library()
+    # «Больше не искать» из пульта: такие треки не тратят бюджет Spotify
+    never = set()
+    if not DRY or os.path.exists(env.JANITOR_DB):
+        never = {r["key"][len("asis:"):] for r in db().execute(
+            "SELECT key FROM reviews WHERE kind='asis' AND status='resolved' AND decision='never'")}
     singles, skipped_empty = [], 0
     for it in lib.items("mb_trackid::^$ singleton:true"):
         path = it.path.decode("utf-8", "replace")
-        if not os.path.isfile(path) or not due(st, path):
+        if not os.path.isfile(path) or not due(st, path) or path in never:
             continue
         if not str(it.artist).strip() and not str(it.title).strip():
             skipped_empty += 1

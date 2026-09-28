@@ -23,6 +23,11 @@
               на прежнее место
   download    {"release_id"}
               отправить в downtify то, что в релизе решено скачать
+  accept      {"item_id", "track_id"}
+              принять кандидата, которого retry отклонил: теги по нему
+  replace     {"item_id", "file"}
+              заменить звук дорожки загруженным файлом: старый — в
+              карантин, теги и обложка — из базы beets в новый файл
   run         {"what": "nightly"}
               запустить ночную работу на следующем цикле
 
@@ -41,8 +46,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import env  # noqa: E402
 import janitordb as jdb  # noqa: E402
 
-UPLOADS = os.path.join(env.CONFIG_DIR, "uploads")
-RUN_FLAG = os.path.join(env.CONFIG_DIR, ".run-now")
+UPLOADS = env.UPLOADS_DIR
+RUN_FLAG = env.RUN_FLAG
 
 # поля beets, которые разрешено возвращать откатом: только теги дорожки,
 # а не служебные (id, path, album_id меняются своими действиями)
@@ -264,6 +269,81 @@ def do_rollback(con, lib, p):
     return msg
 
 
+def do_accept(con, lib, p):
+    """Принять кандидата из очереди «Как есть» — тем же путём, что retry."""
+    import retry
+    from beets.autotag import match as amatch
+    item = lib.get_item(int(p["item_id"]))
+    if item is None:
+        raise Refused("дорожки больше нет в базе")
+    tid = str(p.get("track_id") or "").strip()
+    if not tid:
+        raise Refused("у кандидата нет идентификатора")
+    prop = amatch.tag_item(item, search_ids=[tid])
+    cands = [c for c in prop.candidates if str(getattr(c.info, "track_id", "")) == tid] or prop.candidates[:1]
+    if not cands:
+        raise Refused("источник не отдал кандидата %s" % tid)
+    retry.apply_match(cands[0], item, "пульт")
+    return "принято: %s — %s" % (cands[0].info.artist, cands[0].info.title)
+
+
+AUDIO_MAGIC = (b"ID3", b"fLaC", b"OggS", b"RIFF")
+
+
+def do_replace(con, lib, p):
+    """Заменить звук дорожки загруженным файлом.
+
+    Так чинится подмена, когда правильный файл нашёлся руками: старый уходит
+    в карантин (reason substitution), новый встаёт на его место, а теги и
+    обложка переносятся из базы beets — их подмена не портила, испорчен
+    был только звук.
+    """
+    import mediafile
+    item = lib.get_item(int(p["item_id"]))
+    if item is None:
+        raise Refused("дорожки больше нет в базе")
+    new = p.get("file", "")
+    if not inside(new, UPLOADS) or not os.path.isfile(new):
+        raise Refused("файл должен лежать в папке загрузок пульта")
+    head = open(new, "rb").read(12)
+    if not (head.startswith(AUDIO_MAGIC) or head[4:8] == b"ftyp" or head[:2] == b"\xff\xfb" or head[:2] == b"\xff\xf3"):
+        raise Refused("это не похоже на звуковой файл")
+    old = item.path.decode("utf-8", "replace")
+    if not inside(old, env.MUSIC_DIR):
+        raise Refused("путь вне фонотеки: %s" % old)
+    images = []
+    try:
+        images = mediafile.MediaFile(old).images if os.path.isfile(old) else []
+    except Exception:
+        pass
+    ext = os.path.splitext(new)[1].lower() or os.path.splitext(old)[1]
+    target = os.path.splitext(old)[0] + ext
+    if os.path.isfile(old):
+        q = free_path(os.path.join(env.DUPES_DIR, os.path.relpath(old, env.MUSIC_DIR)))
+        os.makedirs(os.path.dirname(q), exist_ok=True)
+        shutil.move(old, q)
+        os.utime(q, None)
+        jdb.quarantine_add(con, q, old, "substitution", title=str(item.title), artist=str(item.artist),
+                           album_id=item.album_id or 0)
+    if os.path.exists(target):
+        target = free_path(target)
+    shutil.move(new, target)
+    from beets import util
+    item.path = util.bytestring_path(target)
+    f = mediafile.MediaFile(target)
+    item.length, item.bitrate, item.format = f.length, f.bitrate, f.format
+    item.samplerate, item.bitdepth, item.channels = f.samplerate, f.bitdepth or 0, f.channels
+    item.store()
+    item.try_write()
+    if images:
+        f = mediafile.MediaFile(target)
+        f.images = images
+        f.save()
+    jdb.log_event(con, "panel", "replace", {"path": old}, {"path": target, "size": os.path.getsize(target)},
+                  item_id=item.id, path=target)
+    return "звук заменён: %s" % os.path.relpath(target, env.MUSIC_DIR)
+
+
 def do_download(con, lib, p):
     # файлы фонотеки не трогает: downtify кладёт скачанное в incoming, а
     # импортирует его сторож обычным порядком
@@ -273,8 +353,16 @@ def do_download(con, lib, p):
 
 def do_run(con, lib, p):
     what = p.get("what", "nightly")
+    if what == "verify":
+        # сверка свежих импортов коротка — выполняем сразу, не дожидаясь ночи
+        import subprocess
+        r = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify.py"),
+                            "--new"], capture_output=True, text=True, timeout=1800)
+        tail = (r.stdout or "").strip().splitlines()[-1:] or ["готово"]
+        return "сверка: %s" % tail[0]
     if what != "nightly":
         raise Refused("неизвестный запуск: %s" % what)
+    os.makedirs(os.path.dirname(RUN_FLAG), exist_ok=True)
     with open(RUN_FLAG, "w") as fh:
         fh.write(jdb.now())
     return "ночная работа начнётся на следующем цикле"
@@ -287,6 +375,8 @@ HANDLERS = {
     "set_cover": do_set_cover,
     "rollback": do_rollback,
     "download": do_download,
+    "accept": do_accept,
+    "replace": do_replace,
     "run": do_run,
 }
 

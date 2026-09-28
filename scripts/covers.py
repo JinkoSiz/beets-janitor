@@ -386,7 +386,11 @@ def main():
     left = len(missing) - by_album
     print("обложек по треку: %d, по тегу альбома: %d, не нашлось: %d (вопросов в пульт: %d)"
           % (ok, by_album, left, asked))
-    alb_ok, alb_fail = albums(lib, mediafile)
+    alb_ok, alb_fail, alb_fail_items = albums(lib, mediafile)
+    if not DRY:
+        # для сводки пульта: сколько дорожек осталось без картинки
+        import janitordb
+        janitordb.meta_set(db(), "art_missing", left + alb_fail_items)
     stats_out = os.environ.get("JANITOR_STATS_OUT")
     if stats_out and not DRY:
         with open(stats_out, "w", encoding="utf-8") as f:
@@ -463,7 +467,7 @@ def albums(lib, mediafile):
     if LIMIT:
         todo = todo[:LIMIT]
 
-    ok = fail = 0
+    ok = fail = fail_items = 0
     for a, its, tid in todo:
         img, src = fetch(tid)
         if not img:
@@ -473,6 +477,7 @@ def albums(lib, mediafile):
         key = group_key(a.albumartist, a.album)
         if not img:
             fail += 1
+            fail_items += len(its)
             print("   -- не нашлось: %-24s %s" % (str(a.albumartist)[:24], str(a.album)[:30]))
             ask_cover(key, str(a.albumartist), str(a.album), its)
             continue
@@ -510,10 +515,11 @@ def albums(lib, mediafile):
             ok += 1
         except Exception as e:
             fail += 1
+            fail_items += len(its)
             print("      !! записать не вышло: %s" % str(e)[:60])
 
     print("обложек альбомам проставлено: %d, не нашлось: %d" % (ok, fail))
-    return ok, fail
+    return ok, fail, fail_items
 
 
 if __name__ == "__main__":

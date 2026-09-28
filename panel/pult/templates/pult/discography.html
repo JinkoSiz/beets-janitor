@@ -1,0 +1,117 @@
+{% extends "pult/base.html" %}{% load pult l10n %}
+{% block title %}Дискография{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="page-head">
+    <div>
+      <h1>Дискография</h1>
+      <p>Впиши исполнителя, выбери нужного — скачается всё, чего у тебя нет. Уже имеющееся отсеивается до скачивания, а каждый новый трек потом сверяется с превью, чтобы не пришла подмена.</p>
+    </div>
+  </div>
+
+  <div class="panel addbox">
+    <div class="section-head"><h2>Чью дискографию разбираем</h2>
+      {% if recent %}<span class="kv-inline">недавно: {% for a in recent %}<a href="?artist={{ a.id }}">{{ a.name }}</a>{% endfor %}</span>{% endif %}</div>
+    <form class="addrow" hx-get="/artists/search" hx-target="#disco-cands" hx-indicator="#disco-spin">
+      <input type="search" name="q" value="{{ q }}" placeholder="Имя исполнителя" aria-label="Имя исполнителя" required>
+      <input type="hidden" name="mode" value="disco">
+      <button class="btn" type="submit">Найти <span class="htmx-indicator spin" id="disco-spin"></span></button>
+    </form>
+    <div id="disco-cands" class="cands"></div>
+    <div id="disco-job">{% if jobs_running %}<div hx-get="/discography/job/{{ jobs_running.id }}" hx-trigger="load" hx-swap="outerHTML"></div>{% endif %}</div>
+  </div>
+
+  {% if d %}{% with t=d.total %}
+  <form class="panel disco-sum" hx-post="/discography/{{ d.artist.id }}/download" hx-swap="none">
+    <div class="disco-top">
+      <div class="disco-big"><b>{{ d.selected }}</b><span>{{ d.selected|plural:"трек,трека,треков" }} к скачиванию из {{ d.n }} в дискографии {{ d.artist.deezer_name|default:d.artist.name }}</span></div>
+      <div class="row"><span class="pill">{{ d.to_get|length }} {{ d.to_get|length|plural:"релиз,релиза,релизов" }}</span>{% if d.artist.deezer_id %}<a class="pill" href="https://www.deezer.com/artist/{{ d.artist.deezer_id }}" target="_blank" rel="noopener">Deezer</a>{% endif %}</div>
+    </div>
+    <div class="stack" role="img" aria-label="Из {{ d.n }} дорожек: есть {{ t.have }}, повторы {{ t.dup }}, другие версии {{ t.version }}, спросить {{ t.ask }}, скачать {{ t.get }}">
+      <span class="s-have" style="width:{{ d.pct.have|unlocalize }}%"></span><span class="s-dup" style="width:{{ d.pct.dup|unlocalize }}%"></span><span class="s-ver" style="width:{{ d.pct.version|unlocalize }}%"></span><span class="s-ask" style="width:{{ d.pct.ask|unlocalize }}%"></span><span class="s-get" style="width:{{ d.pct.get|unlocalize }}%"></span>
+    </div>
+    <div class="legend">
+      <span><i class="s-have"></i>уже есть <b>{{ t.have }}</b></span>
+      <span><i class="s-dup"></i>повторы внутри дискографии <b>{{ t.dup }}</b></span>
+      <span><i class="s-ver"></i>другие версии{% if not d.flags.versions %}, выключены{% endif %} <b>{{ t.version }}</b></span>
+      <span><i class="s-ask"></i>спросить <b>{{ t.ask }}</b></span>
+      <span><i class="s-get"></i>скачать <b>{{ t.get }}</b></span>
+    </div>
+    <div class="toggles">
+      <label><span class="switch"><input type="checkbox" {% if d.flags.albums %}checked{% endif %} onchange="location.search='?artist={{ d.artist.id }}&albums='+(this.checked?1:0)+'&singles={{ d.flags.singles|yesno:'1,0' }}&versions={{ d.flags.versions|yesno:'1,0' }}'"><span></span></span>Альбомы</label>
+      <label><span class="switch"><input type="checkbox" {% if d.flags.singles %}checked{% endif %} onchange="location.search='?artist={{ d.artist.id }}&albums={{ d.flags.albums|yesno:'1,0' }}&singles='+(this.checked?1:0)+'&versions={{ d.flags.versions|yesno:'1,0' }}'"><span></span></span>Синглы и EP</label>
+      <label><span class="switch"><input type="checkbox" {% if d.flags.versions %}checked{% endif %} onchange="location.search='?artist={{ d.artist.id }}&albums={{ d.flags.albums|yesno:'1,0' }}&singles={{ d.flags.singles|yesno:'1,0' }}&versions='+(this.checked?1:0)"><span></span></span>Инструменталы и другие версии <span class="faint">(+{{ t.version }})</span></label>
+    </div>
+    <input type="hidden" name="versions" value="{{ d.flags.versions|yesno:'1,0' }}">
+
+    {% if d.to_get %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th style="width:36px"></th><th>Релиз</th><th>Год</th><th>Дорожек</th><th>Уже есть</th><th>Скачать</th></tr></thead>
+        <tbody>
+          {% for e in d.to_get %}
+          <tr><td><input type="checkbox" class="cb" name="rel" value="{{ e.rel.id }}" {% if e.rel.status not in 'queued,downloading,in_library' %}checked{% endif %} aria-label="{{ e.rel.title }}"></td>
+            <td><b>{{ e.rel.title }}</b><span class="sub">{{ e.type }}{% if e.grp.version and not d.flags.versions %} · {{ e.grp.version }} {{ e.grp.version|plural:"другая версия выключена,других версии выключены,других версий выключены" }}{% endif %}{% if e.rel.status == 'queued' or e.rel.status == 'downloading' %} · <b>уже в очереди</b>{% endif %}</span></td>
+            <td class="num">{{ e.rel.release_date|slice:":4" }}</td><td class="num">{{ e.tracks }}</td>
+            <td class="num">{% if e.grp.have or e.grp.dup %}{{ e.grp.have|add:e.grp.dup }}{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td class="num"><b>{{ e.sel }}</b></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="actions"><button class="btn primary" type="submit">Скачать выбранное <span class="htmx-indicator spin"></span></button><span class="muted" style="font-size:12.5px;align-self:center">уйдёт в downtify; после импорта каждый трек сверится с превью</span></div>
+    {% else %}
+    <div class="hint"><b>Качать нечего</b> — всё, что есть в дискографии, у тебя уже лежит{% if t.version and not d.flags.versions %} (кроме других версий: их можно включить переключателем выше){% endif %}.</div>
+    {% endif %}
+  </form>
+
+  {% if d.asks %}
+  <div class="group-title"><h2>Спросить <span class="muted">· {{ d.asks|length }} {{ d.asks|length|plural:"трек,трека,треков" }}</span></h2></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Трек</th><th>Похож на</th><th>Сходство</th><th>Послушать</th><th></th></tr></thead>
+      <tbody>
+        {% for a in d.asks %}
+        <tr id="rt-{{ a.t.id }}"><td><b>{{ a.t.title }}</b><span class="sub">{{ a.rel.title }}, {{ a.rel.release_date|slice:":4" }}</span></td>
+          <td>{{ a.info.library_path|short|default:"—" }}</td>
+          <td>{% if a.t.similarity is not None %}<span class="pill {{ a.t.similarity|pctcls }}">{{ a.t.similarity|pct }}</span>{% else %}<span class="pill">не сравнилось</span>{% endif %}</td>
+          <td class="nowrap"><div class="player" style="padding:0;border:0;background:none"><div class="player-row"><button class="play" type="button" aria-pressed="false" aria-label="Превью Deezer"><svg viewBox="0 0 12 12"><path d="M2 1l9 5-9 5z"/></svg></button><span class="faint" style="font-size:12px">превью</span></div><audio preload="none" src="/audio/deezer/{{ a.t.provider_id }}"></audio></div>
+            {% if a.t.library_item %}<div class="player" style="padding:0;border:0;background:none;margin-top:4px"><div class="player-row"><button class="play" type="button" aria-pressed="false" aria-label="Твой файл"><svg viewBox="0 0 12 12"><path d="M2 1l9 5-9 5z"/></svg></button><span class="faint" style="font-size:12px">твой файл</span></div><audio preload="none" src="/audio/item/{{ a.t.library_item }}"></audio></div>{% endif %}</td>
+          <td><span class="row"><button class="btn sm" hx-post="/discography/track/{{ a.t.id }}" hx-vals='{"decision":"skip"}' hx-target="#rt-{{ a.t.id }}" hx-swap="outerHTML">Уже есть</button>
+            <button class="btn sm ghost" hx-post="/discography/track/{{ a.t.id }}" hx-vals='{"decision":"get"}' hx-target="#rt-{{ a.t.id }}" hx-swap="outerHTML">Это другая версия</button></span></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if d.versions %}
+  <details class="collapse">
+    <summary><span>Другие версии <span class="muted" style="font-weight:400">· {{ t.version }} {{ t.version|plural:"трек,трека,треков" }} в {{ d.versions|length }} {{ d.versions|length|plural:"релизе,релизах,релизах" }}{% if not d.flags.versions %}, выключены{% endif %}</span></span></summary>
+    <div class="table-wrap"><table><tbody>
+      {% for e in d.versions %}<tr><td><b>{{ e.rel.title }}</b><span class="sub">{{ e.rel.release_date|slice:":4" }} · {{ e.type }}</span></td><td class="num">{{ e.grp.version }} из {{ e.tracks }}</td></tr>{% endfor %}
+    </tbody></table></div>
+  </details>
+  {% endif %}
+
+  {% if d.full %}
+  <details class="collapse">
+    <summary><span>Уже есть целиком <span class="muted" style="font-weight:400">· {{ d.full|length }} {{ d.full|length|plural:"релиз,релиза,релизов" }}</span></span></summary>
+    <div class="panel-pad" style="border-top:1px solid var(--line);font-size:13px;color:var(--muted)">{% for e in d.full %}{{ e.rel.title }}{% if not forloop.last %} · {% endif %}{% endfor %}</div>
+  </details>
+  {% endif %}
+  {% endwith %}{% endif %}
+
+  <div class="panel panel-pad" style="display:flex;flex-direction:column;gap:12px">
+    <h2>Как отсеивается то, что уже есть</h2>
+    <ol class="steps">
+      <li><b>Решено раньше.</b> Что уже скачивали, пропускали или отметили «уже есть», запоминается и второй раз не предлагается.</li>
+      <li><b>Тот же ISRC.</b> Это паспорт записи: один трек на сингле, альбоме и сборнике носит один номер. Совпал — у тебя есть.</li>
+      <li><b>Пометка версии.</b> «Инструментал», «Live», «Remix», «Sped up» в названии — другая версия, по умолчанию выключена. Если помечен твой экземпляр (у тебя только лайв), а в дискографии студийный — студийный качается.</li>
+      <li><b>Повторы внутри дискографии.</b> Дорожки Deluxe-изданий и синглы с альбома берутся один раз, вместе с основным релизом.</li>
+      <li><b>То же имя и длина, но другой ISRC.</b> Лейблы переиздают ту же запись под новым номером. Тогда превью Deezer сверяется с твоим файлом: от 85% — та же запись, ниже — в «Спросить».</li>
+    </ol>
+    <div class="finding"><b>Почему пометке верим раньше отпечатка.</b> Отпечаток не отличает рэп-инструментал от вокала: «Порно (Инструментал)» против вокального «Порно» дало 86%, «Органы» — 89%. Отпечаток строится по высоте тона, а читка почти не меняет её.</div>
+  </div>
+</section>
+{% endblock %}

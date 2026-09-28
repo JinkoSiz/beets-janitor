@@ -1,0 +1,30 @@
+{% load static %}<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>Вход · beets-janitor</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@700&display=swap">
+<link rel="stylesheet" href="{% static 'pult/panel.css' %}">
+</head>
+<body>
+<div class="login-wrap">
+  <form class="login-box" method="post">
+    {% csrf_token %}
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div><div class="brand-name">beets-janitor</div><div class="brand-sub">пульт фонотеки</div></div>
+    </div>
+    <div class="field">
+      <label for="pw">Пароль</label>
+      <input type="password" id="pw" name="password" autocomplete="current-password" autofocus required>
+    </div>
+    <input type="hidden" name="next" value="{{ next }}">
+    {% if error %}<div class="err" role="alert">{{ error }}</div>{% endif %}
+    <button class="btn primary" type="submit">Войти</button>
+  </form>
+</div>
+</body>
+</html>

@@ -1,14 +1,19 @@
 # Рабочий пример. Скопировать в docker-compose.yml, поправить пути слева
 # от двоеточия и заполнить .env.
 #
-# Образ берём готовый — linuxserver/beets: в нём уже лежат beets, ffmpeg и
-# fpcalc из chromaprint. Своего Dockerfile нет специально: набор — это
-# скрипты, а не форк beets, и собирать ради них образ незачем.
+# Два контейнера:
 #
-# Штатный entrypoint образа поднимает веб-интерфейс; нам он не нужен, поэтому
-# entrypoint подменён на сторожа. Сторож сам раскладывает конфиги из шаблонов
-# и дальше крутится в цикле: импортирует появившееся в incoming и раз в сутки
-# прогоняет библиотеку через цепочку починки.
+#   beets  — сторож: импортирует появившееся в incoming и раз в сутки
+#            прогоняет библиотеку через цепочку починки. Единственный, кто
+#            пишет в фонотеку и в базу beets.
+#   panel  — пульт: решения, новинки, дискография, карантин, журнал. Сам
+#            ничего в фонотеке не трогает — кладёт действие в очередь, а
+#            выполняет его сторож.
+#
+# Для сторожа образ берём готовый — linuxserver/beets: в нём уже лежат beets,
+# ffmpeg и fpcalc из chromaprint. Штатный entrypoint образа поднимает
+# веб-интерфейс beets; нам он не нужен, поэтому entrypoint подменён.
+
 
 services:
   beets:
@@ -31,7 +36,7 @@ services:
     volumes:
       # сам набор скриптов: репозиторий целиком, только на чтение
       - ./:/app:ro
-      # конфиги, база beets, журналы и логи
+      # конфиги, база beets, журналы; внутри — папка janitor/ с общей базой набора
       - ./data/config:/config
       # фонотека
       - /srv/media/music:/music
@@ -40,8 +45,35 @@ services:
       # карантин: убранные копии и битые файлы
       - /srv/media/residue:/residue
 
+  panel:
+    build:
+      context: .
+      dockerfile: panel/Dockerfile
+    container_name: beets-panel
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: Europe/Moscow
+    ports:
+      # наружу — через обратный прокси с HTTPS (Nginx Proxy Manager и т.п.);
+      # без него держите пульт только в локальной сети
+      - "127.0.0.1:8090:8000"
+    volumes:
+      # конфиги и база beets — только на чтение: пульт их читает, но не пишет
+      - ./data/config:/config:ro
+      # кроме своей папки: общая база набора, загрузки обложек и файлов на замену
+      - ./data/config/janitor:/config/janitor
+      # фонотека и карантин — только на чтение, чтобы слушать файлы в карточках
+      - /srv/media/music:/music:ro
+      - /srv/media/residue:/residue:ro
+
+# Скачивание новинок и дискографий идёт через downtify
+# (github.com/henriquesebastiao/downtify): укажите его адрес в DOWNTIFY_URL,
+# а папку, куда он качает, сделайте той же, что incoming у сторожа. Без
+# downtify пульт работает, просто кнопка «Скачать» ставит задания впустую.
+#
 # Если ходите в интернет через прокси (MusicBrainz и Spotify бывают недоступны
 # напрямую), добавьте в environment:
 #   HTTP_PROXY: http://proxy:1081
 #   HTTPS_PROXY: http://proxy:1081
-#   NO_PROXY: localhost,127.0.0.1
+#   NO_PROXY: localhost,127.0.0.1,downtify

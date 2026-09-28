@@ -33,3 +33,9 @@ nightly/
 __pycache__/
 *.py[cod]
 .cache/
+
+# Пульт: собранная статика и то, что образ скачивает при сборке
+panel/static/
+panel/pult/static/pult/htmx.min.js
+# папка набора: общая база, загрузки пульта, пульс сторожа
+janitor/

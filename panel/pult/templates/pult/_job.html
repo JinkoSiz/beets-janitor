@@ -1,0 +1,9 @@
+{% if job.status == "running" %}
+<div class="panel job" hx-get="/discography/job/{{ job.id }}" hx-trigger="every 1500ms" hx-swap="outerHTML">
+  <div class="section-head"><h2>Разбираю дискографию: {{ name }}</h2><span class="spin"></span></div>
+  <div class="muted" style="font-size:13px">{{ job.progress|default:"начинаю" }}</div>
+  <div class="muted" style="font-size:12.5px">Каждый релиз сверяется с фонотекой по ISRC, а спорные треки — по звуку. Большая дискография занимает минуту-две; страницу можно не держать открытой.</div>
+</div>
+{% elif job.status == "failed" %}
+<div class="panel job"><div class="section-head"><h2>Разбор не удался</h2></div><div class="missing">{{ job.result }}</div></div>
+{% endif %}

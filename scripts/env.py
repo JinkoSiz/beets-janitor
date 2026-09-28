@@ -12,6 +12,9 @@
   INCOMING_DIR    папка, куда падают новые файлы                   /incoming
   RESIDUE_DIR     карантин: убранные копии и битые файлы           /residue
   CONFIG_DIR      конфиги beets, база, журналы и логи              /config
+  JANITOR_DIR     общая база набора и загрузки пульта      CONFIG_DIR/janitor
+  LIBRARY_DB      база beets (пульт читает её напрямую)   CONFIG_DIR/library.db
+  DOWNTIFY_URL    куда отправлять скачивание           http://downtify:8000
   LOOSE_DIRS      папки-свалки, где лежат одиночные файлы,
                   а не собранные альбомы (через запятую)
   FPCALC          путь к fpcalc из chromaprint                     fpcalc
@@ -38,9 +41,19 @@ BROKEN_DIR = os.path.join(RESIDUE_DIR, "_broken")
 # чтобы открытие библиотеки не тянуло за собой сеть и плагины.
 LIBRARY_CONFIG = os.path.join(CONFIG_DIR, "library.yaml")
 
-# Общая база набора: прогоны, журнал, очередь решений и действий. Её же
-# читает пульт. Лежит рядом с базой beets — без неё она бессмысленна.
-JANITOR_DB = os.environ.get("JANITOR_DB", os.path.join(CONFIG_DIR, "janitor.db"))
+# Папка набора: общая база (прогоны, журнал, очередь решений и действий),
+# загрузки из пульта, пульс сторожа. Отдельная от конфига beets нарочно:
+# пульту она монтируется на запись, а весь остальной CONFIG_DIR — только на
+# чтение, так что из пульта не испортить ни базу beets, ни ключи.
+JANITOR_DIR = _dir("JANITOR_DIR", os.path.join(CONFIG_DIR, "janitor"))
+JANITOR_DB = os.environ.get("JANITOR_DB", os.path.join(JANITOR_DIR, "janitor.db"))
+UPLOADS_DIR = os.path.join(JANITOR_DIR, "uploads")
+# сторож пишет сюда, чем занят; пульт показывает это в подвале меню
+HEARTBEAT = os.path.join(JANITOR_DIR, "heartbeat")
+# пульт касается этого файла, положив действие: сторож не ждёт конца
+# пятиминутной паузы и выполняет его сразу
+WAKE = os.path.join(JANITOR_DIR, "wake")
+RUN_FLAG = os.path.join(JANITOR_DIR, "run-now")
 
 # База beets. Скрипты внутри beets-watch открывают её через beets, а пульт и
 # разбор дискографии читают напрямую, только на чтение.

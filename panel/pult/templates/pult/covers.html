@@ -1,0 +1,38 @@
+{% extends "pult/base.html" %}{% load pult %}
+{% block title %}Обложки{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="page-head">
+    <div>
+      <h1>Обложки</h1>
+      <p>Скрипт уже искал их везде, где мог: по идентификатору трека в Spotify, Deezer и MusicBrainz, по названию в iTunes и Deezer. Остались самопал и бутлеги, которых нет ни в одном каталоге. Перетащи картинку на карточку — она ляжет внутрь каждого файла, а если папка принадлежит одному альбому, то и файлом рядом.</p>
+    </div>
+    <div class="row">{% if art_pct is not None %}<span class="pill ok">{{ art_pct }}% с обложкой</span>{% endif %}{% if missing %}<span class="pill">без обложки: {{ missing|num }} {{ missing|plural:"трек,трека,треков" }}</span>{% endif %}</div>
+  </div>
+  {% if cards %}
+  <div class="cover-grid">
+    {% for c in cards %}
+    <div class="cov" id="cov-{{ c.row.id }}">
+      <form hx-post="/covers/{{ c.row.id }}/upload" hx-encoding="multipart/form-data" hx-trigger="change" hx-target="#cov-{{ c.row.id }}" hx-swap="outerHTML">
+        <label class="drop"><input type="file" name="image" accept="image/*" aria-label="Обложка для {{ c.row.title }}"><span>перетащи картинку<br>или нажми</span></label>
+      </form>
+      <div><div class="cov-title">{{ c.p.album|default:c.row.title|default:"без альбома" }}</div><div class="cov-meta">{{ c.p.artist|default:"без исполнителя" }} · {{ c.p.count }} {{ c.p.count|plural:"трек,трека,треков" }}{% if c.p.count > 1 %}, одна обложка на всех{% endif %}</div>
+        {% if not c.p.album and c.p.paths %}<div class="cov-meta path">{{ c.p.paths.0|short }}</div>{% endif %}</div>
+      <div class="tried">{% for t in c.p.tried %}<span class="pill">{{ t }}</span>{% endfor %}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty"><b>Всё с обложками</b>То, что скрипт не найдёт ни в одном каталоге, появится здесь карточкой.</div>
+  {% endif %}
+
+  {% if recent %}
+  <div class="section-head"><h2>Поставлено недавно</h2></div>
+  <div class="table-wrap">
+    <table><tbody>
+      {% for r in recent %}<tr><td>{{ r.folder|default:"—" }}</td><td>{% if r.hand %}вручную{% else %}{{ r.src|default:"—" }}{% endif %}</td><td class="mono muted">{{ r.ts|ddmm }}</td></tr>{% endfor %}
+    </tbody></table>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

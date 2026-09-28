@@ -192,6 +192,19 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+-- долгие задачи пульта (разбор дискографии): пульт запускает их у себя в
+-- фоне и показывает ход, а не держит запрос открытым по полминуты
+CREATE TABLE IF NOT EXISTS jobs (
+    id          INTEGER PRIMARY KEY,
+    kind        TEXT NOT NULL,             -- discography
+    params      TEXT,                      -- json
+    status      TEXT NOT NULL DEFAULT 'running',  -- running | done | failed
+    progress    TEXT,                      -- «релиз 12 из 27»
+    result      TEXT,                      -- json или текст ошибки
+    started_at  TEXT NOT NULL,
+    finished_at TEXT
+);
+
 -- сверка звука с превью источника (verify.py): та ли песня под этими тегами
 CREATE TABLE IF NOT EXISTS checks (
     item_id     INTEGER PRIMARY KEY,       -- дорожка в базе beets
@@ -392,6 +405,8 @@ DEFAULTS = {
     "auto_download": "0",
     "follow_new_days": "60",
     "verify_limit": "300",
+    "nightly_hour": "5",
+    "interval": "300",
 }
 
 
@@ -418,10 +433,14 @@ def sync_quarantine(con):
     unquarantine.py.
     """
     purged = 0
-    for r in con.execute("SELECT id, path FROM quarantine WHERE status='held'").fetchall():
+    for r in con.execute("SELECT id, path, size FROM quarantine WHERE status='held'").fetchall():
         if not os.path.exists(r["path"]):
             con.execute("UPDATE quarantine SET status='purged' WHERE id=?", (r["id"],))
             purged += 1
+        elif r["size"] is None:
+            # у записей из старых журналов размера нет — без него пульт
+            # занижал бы объём карантина
+            con.execute("UPDATE quarantine SET size=? WHERE id=?", (os.path.getsize(r["path"]), r["id"]))
     known = {r["path"] for r in con.execute("SELECT path FROM quarantine")}
     added = 0
     for root_dir, reason in ((env.DUPES_DIR, "duplicate"), (env.BROKEN_DIR, "broken")):
@@ -530,6 +549,17 @@ def _cli(argv):
     elif cmd == "step-finish":
         stats = loads(argv[3]) if len(argv) > 3 else None
         finish_step(con, int(argv[1]), argv[2] if len(argv) > 2 else "ok", stats)
+    elif cmd == "get":
+        # значение настройки для shell: janitordb.py get nightly_hour "$NIGHTLY_HOUR".
+        # Заданное в пульте главнее; не задано — значение из окружения, а
+        # встроенное умолчание — последним
+        row = con.execute("SELECT value FROM settings WHERE key=?", (argv[1],)).fetchone()
+        if row is not None:
+            print(row["value"])
+        else:
+            print(argv[2] if len(argv) > 2 and argv[2] != "" else DEFAULTS.get(argv[1], ""))
+    elif cmd == "meta-set":
+        meta_set(con, argv[1], argv[2])
     elif cmd == "sync-quarantine":
         purged, added = sync_quarantine(con)
         print("карантин: удалено по сроку %d, зарегистрировано без записи %d" % (purged, added))

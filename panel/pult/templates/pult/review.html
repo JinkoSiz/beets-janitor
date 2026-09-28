@@ -1,0 +1,38 @@
+{% extends "pult/base.html" %}{% load pult %}
+{% block title %}Решения{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="page-head">
+    <div>
+      <h1>Решения</h1>
+      <p>То, в чём скрипты не уверены и сами не трогают. Послушай обе версии и выбери. Решение запоминается: второй раз о той же паре не спросят.</p>
+    </div>
+  </div>
+  <div class="tabs" role="tablist">
+    <a class="tab" role="tab" href="?tab=subs" aria-selected="{% if tab == 'subs' %}true{% else %}false{% endif %}" style="text-decoration:none">Подмены {% if counts.substitution %}<span class="badge hot">{{ counts.substitution }}</span>{% endif %}</a>
+    <a class="tab" role="tab" href="?tab=dups" aria-selected="{% if tab == 'dups' %}true{% else %}false{% endif %}" style="text-decoration:none">Спорные дубли {% if counts.duplicate %}<span class="badge hot">{{ counts.duplicate }}</span>{% endif %}</a>
+    <a class="tab" role="tab" href="?tab=asis" aria-selected="{% if tab == 'asis' %}true{% else %}false{% endif %}" style="text-decoration:none">Как есть {% if counts.asis %}<span class="badge">{{ counts.asis }}</span>{% endif %}</a>
+  </div>
+
+  {% if tab == "asis" %}
+    {% if cards %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Трек</th><th>Почему не опознан</th><th>Лучший кандидат</th><th></th></tr></thead>
+        <tbody>
+          {% for c in cards %}{% include "pult/_asis_row.html" %}{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty"><b>Очередь «как есть» пуста</b>Всё, что retry не смог опознать сам, появится здесь с лучшим найденным кандидатом.</div>
+    {% endif %}
+  {% else %}
+    <div class="cards">
+      {% for c in cards %}{% include "pult/_card.html" %}{% empty %}
+      <div class="empty"><b>{% if tab == 'subs' %}Подмен нет{% else %}Спорных дублей нет{% endif %}</b>{% if tab == 'subs' %}Скачанное сверяется с превью Spotify и Deezer; подозрительное появится здесь.{% else %}Пары, которые consolidate не решился свести, появятся здесь.{% endif %}</div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

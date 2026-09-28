@@ -100,7 +100,14 @@ def resolve_ids(con, lib, only=None):
         elif not cands:
             attention, info = "нет в Deezer", None
         else:
-            attention, info = "уточнить: несколько кандидатов", json.dumps(cands[:5], ensure_ascii=False)
+            exact = [c for c in cands if c["exact"]]
+            if not exact:
+                attention = "в Deezer не нашёлся, есть похожие"
+            elif not any(c["overlap"] for c in exact):
+                attention = "в Deezer тёзка без общих треков"
+            else:
+                attention = "несколько кандидатов"
+            info = json.dumps(cands[:5], ensure_ascii=False)
         print("   ? %-28s %s" % (a["name"][:28], attention))
         unclear += 1
         if not DRY:

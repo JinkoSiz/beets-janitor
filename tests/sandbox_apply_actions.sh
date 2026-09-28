@@ -7,7 +7,7 @@ set -e
 SCRIPTS=$1; F1=$2; F2=$3; IMG=$4
 SB=/tmp/sandbox-janitor
 rm -rf "$SB"
-mkdir -p "$SB/config/uploads" "$SB/music/Test Artist/Test Album" "$SB/residue"
+mkdir -p "$SB/config/janitor/uploads" "$SB/music/Test Artist/Test Album" "$SB/residue"
 
 cat > "$SB/config/config.yaml" <<EOF
 directory: $SB/music
@@ -23,7 +23,7 @@ cp "$SB/config/config.yaml" "$SB/config/library.yaml"
 
 cp "$F1" "$SB/music/Test Artist/Test Album/01 first.mp3"
 cp "$F2" "$SB/music/Test Artist/Test Album/02 second.mp3"
-cp "$IMG" "$SB/config/uploads/cover.jpg"
+cp "$IMG" "$SB/config/janitor/uploads/cover.jpg"
 
 export MUSIC_DIR="$SB/music" RESIDUE_DIR="$SB/residue" CONFIG_DIR="$SB/config" BEETSDIR="$SB/config"
 export JANITOR_DB="$SB/config/janitor.db" PYTHONPATH="$SCRIPTS"
@@ -96,7 +96,7 @@ run("повторный откат той же записи")
 print("   ", last_action())
 
 # 4. обложка
-jdb.enqueue(con, "set_cover", {"item_ids": [i.id for i in lib.items()], "image": os.path.join(os.environ["CONFIG_DIR"], "uploads", "cover.jpg")})
+jdb.enqueue(con, "set_cover", {"item_ids": [i.id for i in lib.items()], "image": os.path.join(os.environ["CONFIG_DIR"], "janitor", "uploads", "cover.jpg")})
 run("обложка")
 import mediafile
 print("   картинок во втором файле: %d | cover.jpg в папке: %s"
