@@ -28,6 +28,7 @@ auto_download. Остальное запоминается как известн
 import datetime
 import json
 import os
+import re
 import sys
 from collections import Counter, defaultdict
 
@@ -39,7 +40,15 @@ import janitordb as jdb  # noqa: E402
 DRY = "--dry" in sys.argv
 RESOLVE_PER_RUN = 40      # столько новых исполнителей опознаём в Deezer за ночь
 NEW_DAYS = 60             # релиз старше — не новинка, а поздно добавленный старый
+ARRIVE_HOURS = 6          # скачанное не доехало до фонотеки за столько — «не скачалось»
 VA = {"various artists", "various", "va", "сборник", "разные исполнители", "v a"}
+
+
+def parse_ts(s):
+    try:
+        return datetime.datetime.fromisoformat(str(s)[:19])
+    except ValueError:
+        return None
 
 
 def owner(it):
@@ -201,31 +210,102 @@ def catch_up(con, lib, ok_t):
           % (total, waiting, total - waiting, gone))
 
 
-def recheck_downloads(con, lib):
-    """Скачанное доехало до фонотеки? Тогда релиз переходит в «в фонотеке».
+def not_arrived(lib, rel, tracks):
+    """Дорожки релиза, которых в фонотеке всё ещё нет.
 
-    Ищем по ISRC, а если его нет в тегах — по названию и длине у того же
-    исполнителя: downtify не всегда пишет ISRC.
+    Доехавшую узнаём по id трека Spotify (downtify качает по нему, beets
+    пишет его в mb_trackid) или по ISRC. Иначе — по названию и длине у того
+    же исполнителя или в альбоме с тем же названием. Имя исполнителя в Spotify
+    бывает другим («Endspiel» у «Эндшпиля», «Pasha Technique» у «Паши
+    Техника»), его берём с дорожек, узнанных по id. Название сверяем и без
+    хвоста « - …»: так Spotify пишет то, что у Deezer в скобках.
     """
-    moved = 0
-    for rel in con.execute("SELECT r.*, a.name AS artist FROM releases r LEFT JOIN artists a ON a.id=r.artist_id "
-                           "WHERE r.status IN ('queued', 'downloading')").fetchall():
-        rows = [t for t in con.execute("SELECT * FROM release_tracks WHERE release_id=?", (rel["id"],))
-                if disco.wanted(t)]
-        mine = defaultdict(list)
-        for it in lib.of_artist(rel["artist"] or ""):
-            mine[disco.norm_title(it["title"])].append(it["length"])
+    names = disco.name_keys(rel["artist"]) | disco.name_keys(rel["deezer_name"])
+    rest = []
+    for t in tracks:
+        info = jdb.loads(t["info"], {}) or {}
+        names |= disco.name_keys(info.get("artist"))
+        it = lib.by_track_id.get(info.get("spotify_id") or "") or lib.by_isrc.get(t["isrc"] or "")
+        if it is None:
+            rest.append(t)
+            continue
+        for n in disco.artist_names(it["artist"]) + disco.artist_names(it["albumartist"]):
+            names |= disco.name_keys(n)
+    album = disco.title_keys(rel["title"])
 
-        def arrived(t):
-            if t["isrc"] and t["isrc"] in lib.by_isrc:
+    def by_name(t):
+        for it in lib.titled(t["title"]):
+            if abs(it["length"] - (t["duration"] or 0)) > disco.LEN_SAME:
+                continue
+            if disco.title_keys(it["album"]) & album:
                 return True
-            return any(abs(L - (t["duration"] or 0)) <= disco.LEN_SAME for L in mine.get(disco.norm_title(t["title"]), []))
+            if any(disco.name_keys(n) & names for n in disco.artist_names(it["artist"]) + disco.artist_names(it["albumartist"])):
+                return True
+        return False
 
-        if rows and all(arrived(t) for t in rows):
+    return [t for t in rest if not by_name(t)]
+
+
+def not_in_spotify(t):
+    """Дорожку искали в Spotify и не нашли: downtify её не качал и не скачает."""
+    info = jdb.loads(t["info"], {}) or {}
+    return "spotify_id" in info and not info["spotify_id"]
+
+
+def titles(tracks):
+    names = ["«%s»" % t["title"] for t in tracks[:4]]
+    return ", ".join(names) + (" и ещё %d" % (len(tracks) - 4) if len(tracks) > 4 else "")
+
+
+def recheck_downloads(con, lib):
+    """Скачанное доехало до фонотеки? Тогда релиз — «в фонотеке».
+
+    Не доехавшее за ARRIVE_HOURS, найденное в Spotify не целиком и релизы,
+    чьё скачивание упало, — «не скачалось» с причиной. Доедет позже — всё
+    равно станет «в фонотеке». Вернуть (в фонотеку, не скачалось).
+    """
+    moved = failed = 0
+    now = datetime.datetime.now()
+
+    def put(rel, status, note):
+        if not DRY:
+            con.execute("UPDATE releases SET status=?, note=? WHERE id=?", (status, note, rel["id"]))
+        print("   %s %-22s %-34s %s" % ("=" if status == "in_library" else "!", (rel["artist"] or "")[:22],
+                                       rel["title"][:34], note or "в фонотеке"))
+
+    for rel in con.execute("SELECT r.*, a.name AS artist, a.deezer_name FROM releases r "
+                           "LEFT JOIN artists a ON a.id=r.artist_id "
+                           "WHERE r.status IN ('queued', 'downloading', 'failed')").fetchall():
+        tracks = [t for t in con.execute("SELECT * FROM release_tracks WHERE release_id=? ORDER BY id", (rel["id"],))
+                  if disco.wanted(t)]
+        if not tracks:
+            continue
+        rest = not_arrived(lib, rel, tracks)
+        if not rest:
             moved += 1
-            if not DRY:
-                con.execute("UPDATE releases SET status='in_library' WHERE id=?", (rel["id"],))
-    return moved
+            put(rel, "in_library", None)
+            continue
+        if rel["status"] == "queued":
+            # скачивание не состоялось: действие упало, а релиз остался в очереди
+            act = con.execute("SELECT status, result FROM actions WHERE kind='download' "
+                              "AND json_extract(payload, '$.release_id')=? ORDER BY id DESC LIMIT 1",
+                              (rel["id"],)).fetchone()
+            if act is not None and act["status"] == "failed":
+                failed += 1
+                put(rel, "failed", re.sub(r"^(ошибка|отклонено): ", "", act["result"] or "") or "скачивание упало")
+            continue
+        if rel["status"] != "downloading":
+            continue
+        lost = [t for t in rest if not_in_spotify(t)]
+        late = [t for t in rest if t not in lost]
+        since = parse_ts(rel["decided_at"])
+        if late and since is not None and now - since < datetime.timedelta(hours=ARRIVE_HOURS):
+            continue
+        failed += 1
+        put(rel, "failed", "; ".join(x for x in (
+            lost and "в Spotify не нашлось: " + titles(lost),
+            late and "не доехало до фонотеки: " + titles(late)) if x))
+    return moved, failed
 
 
 def main():
@@ -236,8 +316,11 @@ def main():
     if "--arrivals" in sys.argv:
         # только отметить доехавшее: сторож зовёт это сразу после разбора
         # incoming, чтобы скачанный релиз не висел «качается» до ночи
-        arrived = recheck_downloads(con, disco.Library())
-        print("доехало до фонотеки релизов: %d" % arrived)
+        arrived, failed = recheck_downloads(con, disco.Library())
+        print("доехало до фонотеки релизов: %d, не скачалось: %d" % (arrived, failed))
+        if os.environ.get("JANITOR_STATS_OUT") and not DRY:
+            with open(os.environ["JANITOR_STATS_OUT"], "w", encoding="utf-8") as f:
+                json.dump({"arrived": arrived, "failed": failed}, f)
         return
     if "--catch-up" in sys.argv:
         catch_up(con, disco.Library(), float(jdb.setting(con, "ref_ok")))
@@ -269,15 +352,15 @@ def main():
             continue
         new += n
         queued += q
-    arrived = recheck_downloads(con, lib)
-    print("проверено исполнителей: %d (впервые, только запомнить релизы: %d) | новинок: %d | "
-          "в очередь на скачивание: %d | доехало до фонотеки: %d" % (len(rows), firsts, new, queued, arrived))
+    arrived, failed = recheck_downloads(con, lib)
+    print("проверено исполнителей: %d (впервые: %d) | новинок: %d | в очередь на скачивание: %d | "
+          "доехало до фонотеки: %d | не скачалось: %d" % (len(rows), firsts, new, queued, arrived, failed))
 
     stats_out = os.environ.get("JANITOR_STATS_OUT")
     if stats_out and not DRY:
         with open(stats_out, "w", encoding="utf-8") as f:
             json.dump({"artists": len(rows), "added": added, "resolved": done, "unclear": unclear,
-                       "new": new, "queued": queued, "arrived": arrived}, f)
+                       "new": new, "queued": queued, "arrived": arrived, "failed": failed}, f)
 
 
 if __name__ == "__main__":

@@ -111,8 +111,32 @@ def norm_title(s):
     return re.sub(r"[^a-zа-я0-9]+", " ", s).strip()
 
 
+DASH_TAIL = re.compile(r"\s+[-–—]\s+.*$")
+
+
+def title_keys(s):
+    """Ключи сравнения названия: как есть и без хвоста « - …».
+
+    Spotify пишет версию через дефис («Танец костей - prod. by Minigunpunk»),
+    Deezer — в скобках («Танец костей (prod. by Minigunpunk)»); скобки
+    norm_title убирает, а хвост после дефиса — только этот второй ключ.
+    """
+    s = str(s or "").strip()
+    return {k for k in (norm_title(s), norm_title(DASH_TAIL.sub("", s))) if k}
+
+
 def marked(*texts):
     return any(MARK.search(str(t or "")) for t in texts)
+
+
+def unique(items):
+    """Дорожки фонотеки без повторов, в прежнем порядке."""
+    seen, out = set(), []
+    for it in items:
+        if it["id"] not in seen:
+            seen.add(it["id"])
+            out.append(it)
+    return out
 
 
 # ---------------------------------------------------------------- Deezer
@@ -167,7 +191,7 @@ class Library:
         cols = {r[1] for r in con.execute("PRAGMA table_info(items)")}
         isrc = "isrc" if "isrc" in cols else "'' AS isrc"
         self.items = []
-        for r in con.execute("SELECT id, path, artist, albumartist, title, album, length, %s FROM items" % isrc):
+        for r in con.execute("SELECT id, path, artist, albumartist, title, album, length, mb_trackid, %s FROM items" % isrc):
             p = r["path"]
             p = p.decode("utf-8", "replace") if isinstance(p, bytes) else str(p)
             # beets 2 хранит пути относительно папки фонотеки
@@ -177,12 +201,27 @@ class Library:
                 "id": r["id"], "path": p,
                 "artist": r["artist"] or "", "albumartist": r["albumartist"] or "",
                 "title": r["title"] or "", "album": r["album"] or "",
-                "length": float(r["length"] or 0), "isrc": str(r["isrc"] or "").strip().upper()})
+                "length": float(r["length"] or 0), "isrc": str(r["isrc"] or "").strip().upper(),
+                "track_id": str(r["mb_trackid"] or "")})
         con.close()
         self.by_isrc = {}
+        # у дорожек, найденных в Spotify, beets пишет в mb_trackid id трека Spotify
+        self.by_track_id = {}
         for it in self.items:
             if it["isrc"]:
                 self.by_isrc.setdefault(it["isrc"], it)
+            if it["track_id"]:
+                self.by_track_id.setdefault(it["track_id"], it)
+        self._by_title = None
+
+    def titled(self, title):
+        """Дорожки с тем же названием: как есть или без хвоста « - …»."""
+        if self._by_title is None:
+            self._by_title = defaultdict(list)
+            for it in self.items:
+                for k in title_keys(it["title"]):
+                    self._by_title[k].append(it)
+        return unique(it for k in title_keys(title) for it in self._by_title.get(k, []))
 
     def of_artist(self, *names):
         """Дорожки, где среди исполнителей есть любое из имён."""
@@ -264,7 +303,8 @@ class Resolver:
         self.mine = lib.of_artist(*artist_names_)
         self.by_title = defaultdict(list)
         for it in self.mine:
-            self.by_title[norm_title(it["title"])].append(it)
+            for k in title_keys(it["title"]):
+                self.by_title[k].append(it)
         self.ok_t = ok_t
         self.compare = compare
         self.seen_isrc = {}
@@ -325,7 +365,8 @@ class Resolver:
         if isrc and isrc in self.lib.by_isrc:
             return done("have_isrc", "тот же ISRC", self.lib.by_isrc[isrc])
 
-        same_len = [c for c in self.by_title.get(key, []) if abs(c["length"] - dur) <= LEN_SAME]
+        named = unique(c for k in title_keys(title) for c in self.by_title.get(k, []))
+        same_len = [c for c in named if abs(c["length"] - dur) <= LEN_SAME]
         if is_marked:
             twins = [c for c in same_len if marked(c["title"], c["album"])]
             if not twins:

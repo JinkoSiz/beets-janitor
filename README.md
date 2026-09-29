@@ -101,7 +101,7 @@ A small web app (Django + htmx) for the part that needs a human:
 |---|---|
 | Summary | last night's chain step by step, what is waiting for you, Spotify budget, latest imports and their check results |
 | Decisions | suspected wrong recordings, uncertain duplicate pairs, tracks filed as-is — with players for both versions and the similarity scale |
-| New releases | what the artists you follow put out; download or skip |
+| New releases | what the artists you follow put out; download or skip. A download that never reached the library says why (not on Spotify, didn't arrive) and can be retried for just the missing tracks |
 | Artists | who is followed (collected from the library automatically, plus your own), and picking the right one when the name is ambiguous |
 | Discography | type an artist, pick the right one, download everything you don't have yet |
 | Covers | drop an image onto an album nobody has artwork for |

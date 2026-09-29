@@ -215,9 +215,13 @@ def _rel_card(request, con, rel_id, text):
 @require_POST
 def release_get(request, rel_id):
     con = data.jcon()
-    data.enqueue(con, "download", {"release_id": rel_id})
-    con.execute("UPDATE releases SET status='queued', decided_at=? WHERE id=?", (jdb.now(), rel_id))
-    return _rel_card(request, con, rel_id, "В очереди на скачивание: downtify, потом сверка по превью")
+    r = con.execute("SELECT status FROM releases WHERE id=?", (rel_id,)).fetchone()
+    retry = r is not None and r["status"] == "failed"
+    # повтор после «не скачалось» докачивает только то, чего нет в фонотеке
+    data.enqueue(con, "download", {"release_id": rel_id, "retry": 1} if retry else {"release_id": rel_id})
+    con.execute("UPDATE releases SET status='queued', decided_at=?, note=NULL WHERE id=?", (jdb.now(), rel_id))
+    return _rel_card(request, con, rel_id, "Повторю: докачаю то, чего нет в фонотеке" if retry
+                     else "В очереди на скачивание: downtify, потом сверка по превью")
 
 
 @require_POST
@@ -417,14 +421,14 @@ def disco_download(request, aid):
         return toast(HttpResponse(status=204), "Не выбрано ни одного релиза")
     n = 0
     for rid in ids:
-        rel = con.execute("SELECT id FROM releases WHERE id=? AND artist_id=?", (rid, aid)).fetchone()
+        rel = con.execute("SELECT id, status FROM releases WHERE id=? AND artist_id=?", (rid, aid)).fetchone()
         if rel is None:
             continue
         if versions:
             con.execute("UPDATE release_tracks SET decision='get' WHERE release_id=? AND verdict='version' "
                         "AND decision IS NULL", (rid,))
-        data.enqueue(con, "download", {"release_id": rid})
-        con.execute("UPDATE releases SET status='queued', decided_at=? WHERE id=?", (jdb.now(), rid))
+        data.enqueue(con, "download", {"release_id": rid, "retry": 1} if rel["status"] == "failed" else {"release_id": rid})
+        con.execute("UPDATE releases SET status='queued', decided_at=?, note=NULL WHERE id=?", (jdb.now(), rid))
         n += 1
     resp = toast(HttpResponse(""), "В очередь на скачивание: %d %s" % (n, "релиз" if n == 1 else "релиза" if n < 5 else "релизов"))
     resp["HX-Redirect"] = "/releases/?f=work"

@@ -85,7 +85,7 @@ def nav_counts():
                 c["covers"] += r["n"]
             else:
                 c["review"] += r["n"]
-        c["releases"] = con.execute("SELECT count(*) FROM releases WHERE status='new'").fetchone()[0]
+        c["releases"] = con.execute("SELECT count(*) FROM releases WHERE status IN ('new', 'failed')").fetchone()[0]
         c["artists"] = con.execute("SELECT count(*) FROM artists WHERE follow=1 AND excluded=0").fetchone()[0]
         c["quarantine"] = con.execute("SELECT count(*) FROM quarantine WHERE status='held'").fetchone()[0]
         return c
@@ -121,7 +121,11 @@ STEP_TEXT = {
         s.get("dupes", 0), s.get("merged", 0), s.get("discs", 0) + s.get("discs_multi", 0), s.get("unsure", 0) + s.get("alien", 0)),
     "verify": lambda s: "сверено <b>%d</b>, подмен <b>%d</b>, спорных %d" % (
         sum(v for k, v in s.items() if k not in ("new", "backlog")), s.get("substitution", 0), s.get("unsure", 0)),
-    "follow": lambda s: "исполнителей %d, новинок <b>%d</b>, в очередь %d" % (s.get("artists", 0), s.get("new", 0), s.get("queued", 0)),
+    "follow": lambda s: "исполнителей %d, новинок <b>%d</b>, в очередь %d%s" % (
+        s.get("artists", 0), s.get("new", 0), s.get("queued", 0),
+        ", не скачалось <b>%d</b>" % s["failed"] if s.get("failed") else ""),
+    "arrivals": lambda s: "доехало релизов <b>%d</b>%s" % (
+        s.get("arrived", 0), ", не скачалось <b>%d</b>" % s["failed"] if s.get("failed") else ""),
     "covers": lambda s: "обложек <b>+%d</b>, не нашлось %d" % (
         s.get("singles_found", 0) + s.get("albums_found", 0), s.get("singles_missing", 0) + s.get("albums_missing", 0)),
     "import": lambda s: "дублей в карантин %d, других версий %d" % (s.get("leftovers_parked", 0), s.get("leftovers_versions", 0)),
@@ -416,14 +420,15 @@ def can_rollback(ev, before):
 
 # ---------------------------------------------------------------- новинки и исполнители
 REL_STATUS = {"new": ("ждёт решения", "acc"), "queued": ("в очереди", "info"), "downloading": ("качается", "info"),
-              "in_library": ("в фонотеке", "ok"), "skipped": ("пропущен", ""), "known": ("известен", "")}
+              "in_library": ("в фонотеке", "ok"), "failed": ("не скачалось", "bad"), "skipped": ("пропущен", ""),
+              "known": ("известен", "")}
 TYPE_TEXT = {"album": "альбом", "single": "сингл", "ep": "EP", "compile": "сборник"}
 
 
 def releases(con, f=None):
     where = {"wait": "r.status='new'", "work": "r.status IN ('queued','downloading')",
-             "done": "r.status='in_library'", "skip": "r.status='skipped'"}.get(
-        f, "r.status IN ('new','queued','downloading','in_library','skipped')")
+             "fail": "r.status='failed'", "done": "r.status='in_library'", "skip": "r.status='skipped'"}.get(
+        f, "r.status IN ('new','queued','downloading','failed','in_library','skipped')")
     rows = con.execute(
         "SELECT r.*, a.name AS artist FROM releases r LEFT JOIN artists a ON a.id=r.artist_id "
         "WHERE %s ORDER BY r.release_date DESC, r.id DESC LIMIT 120" % where).fetchall()
@@ -443,9 +448,9 @@ def releases(con, f=None):
 
 def release_counts(con):
     c = {r["status"]: r["n"] for r in con.execute("SELECT status, count(*) n FROM releases GROUP BY status")}
-    return {"all": sum(c.get(k, 0) for k in ("new", "queued", "downloading", "in_library", "skipped")),
+    return {"all": sum(c.get(k, 0) for k in ("new", "queued", "downloading", "failed", "in_library", "skipped")),
             "wait": c.get("new", 0), "work": c.get("queued", 0) + c.get("downloading", 0),
-            "done": c.get("in_library", 0), "skip": c.get("skipped", 0)}
+            "fail": c.get("failed", 0), "done": c.get("in_library", 0), "skip": c.get("skipped", 0)}
 
 
 def artists(con, f=None):

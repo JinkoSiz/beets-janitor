@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import env  # noqa: E402
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -158,13 +158,14 @@ CREATE TABLE IF NOT EXISTS releases (
     type          TEXT,                    -- album | single | ep | compilation
     release_date  TEXT,
     tracks_total  INTEGER,
-    status        TEXT NOT NULL DEFAULT 'new',  -- known | new | queued | downloading | in_library | skipped
+    status        TEXT NOT NULL DEFAULT 'new',  -- known | new | queued | downloading | in_library | failed | skipped
     counts        TEXT,                    -- json: have / dup / version / ask / get
     found_at      TEXT NOT NULL,
     decided_at    TEXT,
     cover         TEXT,
     link          TEXT,
     feat          INTEGER,                 -- 1 — чужой релиз, исполнитель в нём гость
+    note          TEXT,                    -- почему не скачалось (при failed)
     UNIQUE(provider, provider_id)
 );
 CREATE INDEX IF NOT EXISTS releases_status ON releases(status, release_date);
@@ -243,7 +244,7 @@ def connect(path=None):
 # только через ALTER, который и делается здесь, если колонки ещё нет.
 ADDED_COLUMNS = {
     "artists": [("deezer_name", "TEXT"), ("picture", "TEXT"), ("info", "TEXT")],
-    "releases": [("cover", "TEXT"), ("link", "TEXT"), ("feat", "INTEGER")],
+    "releases": [("cover", "TEXT"), ("link", "TEXT"), ("feat", "INTEGER"), ("note", "TEXT")],
     "release_tracks": [("decision", "TEXT"), ("info", "TEXT")],
 }
 

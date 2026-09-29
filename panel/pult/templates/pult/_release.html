@@ -7,12 +7,14 @@
   <div class="rel-body">
     <div class="rel-artist">{% if x.owner %}{{ x.owner }} <span class="muted" style="font-weight:400">· при участии {% endif %}{% if r.artist_id %}<a href="/discography/?artist={{ r.artist_id }}" style="color:inherit;text-decoration:none">{{ r.artist }}</a>{% else %}{{ r.artist }}{% endif %}{% if x.owner %}</span>{% endif %}</div>
     <div class="rel-meta">{{ r.release_date|rudate }}{% if r.tracks_total %} · {{ r.tracks_total }} {{ r.tracks_total|plural:"трек,трека,треков" }}{% endif %}{% if x.have %} · есть {{ x.have }}{% endif %}{% if x.counts.version %} · других версий {{ x.counts.version }}{% endif %}</div>
+    {% if r.status == 'failed' and r.note %}<div class="rel-note">{{ r.note }}</div>{% endif %}
     <div class="rel-foot">
       <span class="pill {{ x.status.1 }}">{{ x.status.0 }}{% if r.status == 'new' and x.get %} · скачать {{ x.get }}{% endif %}{% if r.status == 'new' and x.counts.ask %} · спросить {{ x.counts.ask }}{% endif %}</span>
-      {% if r.status == 'new' %}
+      {% if r.status == 'new' or r.status == 'failed' %}
       <span class="row">
         <button class="btn sm ghost" hx-post="/releases/{{ r.id }}/skip" hx-target="#rel-{{ r.id }}" hx-swap="outerHTML">Пропустить</button>
-        {% if x.get or x.counts.ask %}<button class="btn sm primary" hx-post="/releases/{{ r.id }}/get" hx-target="#rel-{{ r.id }}" hx-swap="outerHTML">Скачать</button>{% endif %}
+        {% if r.status == 'failed' %}<button class="btn sm primary" hx-post="/releases/{{ r.id }}/get" hx-target="#rel-{{ r.id }}" hx-swap="outerHTML">Ещё раз</button>
+        {% elif x.get or x.counts.ask %}<button class="btn sm primary" hx-post="/releases/{{ r.id }}/get" hx-target="#rel-{{ r.id }}" hx-swap="outerHTML">Скачать</button>{% endif %}
       </span>
       {% elif r.link %}
       <a class="btn sm ghost" href="{{ r.link }}" target="_blank" rel="noopener">Deezer</a>

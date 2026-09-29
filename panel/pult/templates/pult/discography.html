@@ -59,7 +59,7 @@
         <tbody>
           {% for e in d.to_get %}
           <tr><td><input type="checkbox" class="cb" name="rel" value="{{ e.rel.id }}" {% if e.rel.status not in 'queued,downloading,in_library' %}checked{% endif %} aria-label="{{ e.rel.title }}"></td>
-            <td><b>{{ e.rel.title }}</b><span class="sub">{{ e.type }}{% if e.feat %} · фит{% endif %}{% if e.grp.version and not d.flags.versions %} · {{ e.grp.version }} {{ e.grp.version|plural:"другая версия выключена,других версии выключены,других версий выключены" }}{% endif %}{% if e.rel.status == 'queued' or e.rel.status == 'downloading' %} · <b>уже в очереди</b>{% endif %}</span></td>
+            <td><b>{{ e.rel.title }}</b><span class="sub">{{ e.type }}{% if e.feat %} · фит{% endif %}{% if e.grp.version and not d.flags.versions %} · {{ e.grp.version }} {{ e.grp.version|plural:"другая версия выключена,других версии выключены,других версий выключены" }}{% endif %}{% if e.rel.status == 'queued' or e.rel.status == 'downloading' %} · <b>уже в очереди</b>{% elif e.rel.status == 'failed' %} · <b>не скачалось</b>{% endif %}</span></td>
             <td class="num">{{ e.rel.release_date|slice:":4" }}</td><td class="num">{{ e.tracks }}</td>
             <td class="num">{% if e.grp.have or e.grp.dup %}{{ e.grp.have|add:e.grp.dup }}{% else %}<span class="muted">—</span>{% endif %}</td>
             <td class="num"><b>{{ e.sel }}</b></td></tr>

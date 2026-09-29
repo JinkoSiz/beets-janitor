@@ -16,6 +16,7 @@
     <a class="chip" href="?f=all" aria-pressed="{% if f == 'all' %}true{% else %}false{% endif %}">Все <span class="n">{{ counts.all }}</span></a>
     <a class="chip" href="?f=wait" aria-pressed="{% if f == 'wait' %}true{% else %}false{% endif %}">Ждут решения <span class="n">{{ counts.wait }}</span></a>
     <a class="chip" href="?f=work" aria-pressed="{% if f == 'work' %}true{% else %}false{% endif %}">В работе <span class="n">{{ counts.work }}</span></a>
+    {% if counts.fail %}<a class="chip" href="?f=fail" aria-pressed="{% if f == 'fail' %}true{% else %}false{% endif %}">Не скачалось <span class="n">{{ counts.fail }}</span></a>{% endif %}
     <a class="chip" href="?f=done" aria-pressed="{% if f == 'done' %}true{% else %}false{% endif %}">В фонотеке <span class="n">{{ counts.done }}</span></a>
     <a class="chip" href="?f=skip" aria-pressed="{% if f == 'skip' %}true{% else %}false{% endif %}">Пропущены <span class="n">{{ counts.skip }}</span></a>
     {% if counts.wait %}<button class="btn sm primary" style="margin-left:auto" hx-post="/releases/get-all" hx-swap="none">Скачать все ждущие ({{ counts.wait }})</button>{% endif %}

@@ -349,7 +349,13 @@ def do_download(con, lib, p):
     # файлы фонотеки не трогает: downtify кладёт скачанное в incoming, а
     # импортирует его сторож обычным порядком
     import download
-    return download.release(con, int(p["release_id"]))
+    try:
+        return download.release(con, int(p["release_id"]), retry=bool(p.get("retry")))
+    except Exception as e:
+        # иначе релиз так и висел бы «в очереди»: в пульте он станет
+        # «не скачалось» с причиной и кнопкой «Ещё раз»
+        con.execute("UPDATE releases SET status='failed', note=? WHERE id=?", (str(e)[:300], int(p["release_id"])))
+        raise
 
 
 def do_run(con, lib, p):

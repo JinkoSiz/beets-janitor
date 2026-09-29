@@ -120,14 +120,57 @@ def downtify_batch(songs):
 
 
 # ---------------------------------------------------------------- релиз
-def release(con, release_id, artist_name=None):
-    """Отправить в downtify то, что в релизе решено скачать. Вернуть отчёт."""
+def note_track(con, t, sid, searched=True):
+    """Запомнить у дорожки, под каким id Spotify она ушла в downtify.
+
+    По этому id follow.py узнает её в фонотеке: название и имя исполнителя в
+    Spotify бывают другими, чем в Deezer. spotify_id = None — искали, но в
+    Spotify её нет; ключа нет вовсе — ушла с альбомом, id не сопоставился.
+    """
+    info = jdb.loads(t["info"], {})
+    if sid or searched:
+        info["spotify_id"] = sid
+    else:
+        info.pop("spotify_id", None)
+    con.execute("UPDATE release_tracks SET info=? WHERE id=?", (json.dumps(info, ensure_ascii=False), t["id"]))
+
+
+def album_track_ids(tracks, songs):
+    """Какой дорожке релиза какая песня альбома Spotify: по названию и длине,
+    а не сошлось — по номеру, если длина та же (альбом найден по UPC, порядок
+    дорожек тот же)."""
+    out = {}
+    for n, t in enumerate(tracks):
+        for s in songs:
+            if disco.title_keys(s.get("name")) & disco.title_keys(t["title"]) and \
+                    abs(float(s.get("duration") or 0) - (t["duration"] or 0)) <= LEN_OK:
+                out[t["id"]] = s.get("song_id")
+                break
+        else:
+            s = songs[n] if len(songs) == len(tracks) else None
+            if s is not None and abs(float(s.get("duration") or 0) - (t["duration"] or 0)) <= LEN_OK:
+                out[t["id"]] = s.get("song_id")
+    return out
+
+
+def release(con, release_id, artist_name=None, retry=False):
+    """Отправить в downtify то, что в релизе решено скачать. Вернуть отчёт.
+
+    retry — повтор после «не скачалось»: качаем только то, что так и не
+    доехало до фонотеки, иначе доехавшее легло бы в incoming второй копией.
+    """
     rel = con.execute("SELECT r.*, a.name AS artist, a.deezer_name FROM releases r "
                       "LEFT JOIN artists a ON a.id = r.artist_id WHERE r.id=?", (release_id,)).fetchone()
     if rel is None:
         raise ValueError("нет такого релиза")
-    rows = con.execute("SELECT * FROM release_tracks WHERE release_id=?", (release_id,)).fetchall()
+    rows = con.execute("SELECT * FROM release_tracks WHERE release_id=? ORDER BY id", (release_id,)).fetchall()
     want = [t for t in rows if disco.wanted(t)]
+    if want and retry:
+        import follow
+        want = follow.not_arrived(disco.Library(), rel, want)
+        if not want:
+            con.execute("UPDATE releases SET status='in_library', note=NULL WHERE id=?", (release_id,))
+            return "всё из релиза уже в фонотеке"
     if not want:
         return "в релизе нечего качать"
     artist = artist_name or rel["deezer_name"] or rel["artist"] or ""
@@ -139,14 +182,14 @@ def release(con, release_id, artist_name=None):
         sid = album_by_upc(alb["upc"]) if alb.get("upc") else None
         if sid:
             songs = downtify_songs("https://open.spotify.com/album/" + sid)
+            ids = album_track_ids(want, songs)
+            for t in want:
+                note_track(con, t, ids.get(t["id"]), searched=False)
     if not songs:
         for t in want:
             sid = (track_by_isrc(t["isrc"], t["duration"]) if t["isrc"] else None) or \
                 track_by_name(artist, t["title"], t["duration"])
-            info = jdb.loads(t["info"], {})
-            info["spotify_id"] = sid
-            con.execute("UPDATE release_tracks SET info=? WHERE id=?",
-                        (json.dumps(info, ensure_ascii=False), t["id"]))
+            note_track(con, t, sid)
             if not sid:
                 missing.append(t["title"])
                 continue
@@ -155,7 +198,8 @@ def release(con, release_id, artist_name=None):
         raise RuntimeError("в Spotify не нашлось ни одной дорожки: %s" % ", ".join(missing[:5]))
 
     downtify_batch(songs)
-    con.execute("UPDATE releases SET status='downloading', decided_at=? WHERE id=?", (jdb.now(), release_id))
+    con.execute("UPDATE releases SET status='downloading', decided_at=?, note=NULL WHERE id=?",
+                (jdb.now(), release_id))
     jdb.log_event(con, "download", "queue", None,
                   {"release": rel["title"], "artist": artist, "tracks": len(songs), "missing": missing})
     msg = "в очередь downtify: %d дорожек «%s»" % (len(songs), rel["title"])
