@@ -16,9 +16,9 @@ follow_min_tracks дорожек, — плюс добавленные в пул�
 «уточнить», и выбор делается в пульте.
 
 При первой проверке исполнителя в новинки идёт только свежее — не старше
-follow_new_days (60 дней), и само не качается: это вышло до начала слежения.
-Остальное запоминается как известное, иначе в «Новинки» разом высыпалась бы
-вся дискография. Недостающее из старого — это страница «Дискография».
+follow_new_days (60 дней); качается оно, как и любая новинка, по переключателю
+auto_download. Остальное запоминается как известное, иначе в «Новинки» разом
+высыпалась бы вся дискография. Недостающее из старого — это «Дискография».
 
   follow.py [--dry] [--artist ИМЯ]
   follow.py --arrivals     только отметить скачанные релизы, доехавшие до фонотеки
@@ -134,12 +134,10 @@ def check(con, a, lib, ok_t, auto):
     days = int(jdb.setting(con, "follow_new_days", NEW_DAYS))
     cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     first = a["last_checked"] is None
-    # свежее (не старше follow_new_days) — в новинки и при первой проверке:
-    # это вышло до начала слежения, и сам не качается — решать тебе
+    # свежее (не старше follow_new_days) — в новинки и при первой проверке;
+    # качается по переключателю auto_download, как любая новинка
     new = [r for r in fresh if (r.get("release_date") or "") >= cutoff]
     old = [r for r in fresh if r not in new]
-    if first:
-        auto = False
 
     queued = 0
     if not DRY:

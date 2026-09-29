@@ -221,6 +221,23 @@ def release_get(request, rel_id):
 
 
 @require_POST
+def release_get_all(request):
+    """Все ждущие решения — в очередь разом (когда «качать сразу» выключено)."""
+    con = data.jcon()
+    n = 0
+    for r in con.execute("SELECT id, counts FROM releases WHERE status='new'").fetchall():
+        c = data.loads(r["counts"], {}) or {}
+        if not c.get("get"):
+            continue
+        data.enqueue(con, "download", {"release_id": r["id"]})
+        con.execute("UPDATE releases SET status='queued', decided_at=? WHERE id=?", (jdb.now(), r["id"]))
+        n += 1
+    resp = toast(HttpResponse(""), "В очередь на скачивание: %d" % n)
+    resp["HX-Redirect"] = "/releases/?f=work"
+    return resp
+
+
+@require_POST
 def release_skip(request, rel_id):
     con = data.jcon()
     con.execute("UPDATE releases SET status='skipped', decided_at=? WHERE id=?", (jdb.now(), rel_id))
