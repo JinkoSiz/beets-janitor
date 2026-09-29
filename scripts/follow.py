@@ -15,12 +15,15 @@ follow_min_tracks дорожек, — плюс добавленные в пул�
 путается. Если однозначного кандидата нет, исполнитель помечается
 «уточнить», и выбор делается в пульте.
 
-При первой проверке исполнителя его прежние релизы только запоминаются, а
-не объявляются новинками: иначе в «Новинки» разом высыпалась бы вся
-дискография. Недостающее из старого — это страница «Дискография».
+При первой проверке исполнителя в новинки идёт только свежее — не старше
+follow_new_days (60 дней), и само не качается: это вышло до начала слежения.
+Остальное запоминается как известное, иначе в «Новинки» разом высыпалась бы
+вся дискография. Недостающее из старого — это страница «Дискография».
 
   follow.py [--dry] [--artist ИМЯ]
   follow.py --arrivals     только отметить скачанные релизы, доехавшие до фонотеки
+  follow.py --catch-up     разово: свежие релизы, которые прежняя версия при
+                           первой проверке записала известными, — в новинки
 """
 import datetime
 import json
@@ -118,7 +121,10 @@ def resolve_ids(con, lib, only=None):
 
 def check(con, a, lib, ok_t, auto):
     """Релизы одного исполнителя. Вернуть (новинок, в очередь)."""
-    rels = disco.releases_of(a["deezer_id"])
+    today = datetime.date.today().isoformat()
+    # анонс с датой из будущего не записываем вовсе: иначе в день выхода он
+    # был бы уже «известным» и в новинки не попал
+    rels = [r for r in disco.releases_of(a["deezer_id"]) if (r.get("release_date") or "") <= today]
     if not rels:
         return 0, 0
     known = {r["provider_id"] for r in con.execute(
@@ -128,8 +134,12 @@ def check(con, a, lib, ok_t, auto):
     days = int(jdb.setting(con, "follow_new_days", NEW_DAYS))
     cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     first = a["last_checked"] is None
-    new = [] if first else [r for r in fresh if (r.get("release_date") or "") >= cutoff]
+    # свежее (не старше follow_new_days) — в новинки и при первой проверке:
+    # это вышло до начала слежения, и сам не качается — решать тебе
+    new = [r for r in fresh if (r.get("release_date") or "") >= cutoff]
     old = [r for r in fresh if r not in new]
+    if first:
+        auto = False
 
     queued = 0
     if not DRY:
@@ -155,6 +165,42 @@ def check(con, a, lib, ok_t, auto):
         con.execute("UPDATE artists SET last_checked=?, last_release_date=? WHERE id=?",
                     (jdb.now(), latest or None, a["id"]))
     return len(new), queued
+
+
+def catch_up(con, lib, ok_t):
+    """Разово: свежие релизы, которые первая проверка записала известными.
+
+    Прежняя версия при первой проверке исполнителя запоминала всё подряд, и
+    вышедшее за последние недели в новинки не попадало. Здесь такие релизы
+    разбираются против фонотеки: чего нет — «ждут решения», всё есть — «в
+    фонотеке». Сами не качаются. Анонсы с датой из будущего убираются, чтобы
+    в день выхода прийти новинками.
+    """
+    today = datetime.date.today().isoformat()
+    days = int(jdb.setting(con, "follow_new_days", NEW_DAYS))
+    cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    total = waiting = 0
+    for a in con.execute("SELECT * FROM artists WHERE deezer_id IS NOT NULL AND follow=1 AND excluded=0").fetchall():
+        rows = con.execute(
+            "SELECT * FROM releases WHERE artist_id=? AND status='known' AND tracks_total IS NULL "
+            "AND release_date >= ? AND release_date <= ?", (a["id"], cutoff, today)).fetchall()
+        if not rows:
+            continue
+        rels = [{"id": r["provider_id"], "title": r["title"], "record_type": r["type"],
+                 "release_date": r["release_date"], "cover_medium": r["cover"], "link": r["link"]} for r in rows]
+        resolved = disco.resolve(a["deezer_id"], a["deezer_name"] or a["name"], lib, ok_t=ok_t, releases=rels)
+        ids = disco.store(con, a["id"], resolved, "new")
+        for r in resolved:
+            c = r["counts"]
+            st = "in_library" if not c.get("get") and not c.get("ask") else "new"
+            con.execute("UPDATE releases SET status=? WHERE id=?", (st, ids[r["provider_id"]]))
+            total += 1
+            waiting += st == "new"
+            print("   %s %-22s %-10s %-34s скачать %d%s" % ("+" if st == "new" else "=", a["name"][:22],
+                  r["release_date"], str(r["title"])[:34], c.get("get", 0), "  фит" if r.get("feat") else ""))
+    gone = con.execute("DELETE FROM releases WHERE status='known' AND release_date > ?", (today,)).rowcount
+    print("свежих релизов разобрано: %d, ждут решения: %d, уже в фонотеке: %d; анонсов из будущего убрано: %d"
+          % (total, waiting, total - waiting, gone))
 
 
 def recheck_downloads(con, lib):
@@ -194,6 +240,9 @@ def main():
         # incoming, чтобы скачанный релиз не висел «качается» до ночи
         arrived = recheck_downloads(con, disco.Library())
         print("доехало до фонотеки релизов: %d" % arrived)
+        return
+    if "--catch-up" in sys.argv:
+        catch_up(con, disco.Library(), float(jdb.setting(con, "ref_ok")))
         return
     if jdb.setting(con, "follow_enabled") != "1" and not only:
         print("слежение выключено в настройках")

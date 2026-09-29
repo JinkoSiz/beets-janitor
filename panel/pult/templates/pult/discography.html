@@ -38,10 +38,18 @@
       <span><i class="s-get"></i>скачать <b>{{ t.get }}</b></span>
     </div>
     <div class="toggles">
-      <label><span class="switch"><input type="checkbox" {% if d.flags.albums %}checked{% endif %} onchange="location.search='?artist={{ d.artist.id }}&albums='+(this.checked?1:0)+'&singles={{ d.flags.singles|yesno:'1,0' }}&versions={{ d.flags.versions|yesno:'1,0' }}'"><span></span></span>Альбомы</label>
-      <label><span class="switch"><input type="checkbox" {% if d.flags.singles %}checked{% endif %} onchange="location.search='?artist={{ d.artist.id }}&albums={{ d.flags.albums|yesno:'1,0' }}&singles='+(this.checked?1:0)+'&versions={{ d.flags.versions|yesno:'1,0' }}'"><span></span></span>Синглы и EP</label>
-      <label><span class="switch"><input type="checkbox" {% if d.flags.versions %}checked{% endif %} onchange="location.search='?artist={{ d.artist.id }}&albums={{ d.flags.albums|yesno:'1,0' }}&singles={{ d.flags.singles|yesno:'1,0' }}&versions='+(this.checked?1:0)"><span></span></span>Инструменталы и другие версии <span class="faint">(+{{ t.version }})</span></label>
+      <label><span class="switch"><input type="checkbox" {% if d.flags.albums %}checked{% endif %} onchange="discoFlag('albums', this.checked)"><span></span></span>Альбомы</label>
+      <label><span class="switch"><input type="checkbox" {% if d.flags.singles %}checked{% endif %} onchange="discoFlag('singles', this.checked)"><span></span></span>Синглы и EP</label>
+      <label><span class="switch"><input type="checkbox" {% if d.flags.feats %}checked{% endif %} onchange="discoFlag('feats', this.checked)"><span></span></span>Фиты <span class="faint">(чужие релизы, где он гость{% if d.feats %}: {{ d.feats|length }}{% endif %})</span></label>
+      <label><span class="switch"><input type="checkbox" {% if d.flags.versions %}checked{% endif %} onchange="discoFlag('versions', this.checked)"><span></span></span>Инструменталы и другие версии <span class="faint">(+{{ t.version }})</span></label>
     </div>
+    <script>
+      function discoFlag(key, on) {
+        var p = new URLSearchParams(location.search);
+        p.set(key, on ? "1" : "0");
+        location.search = p.toString();
+      }
+    </script>
     <input type="hidden" name="versions" value="{{ d.flags.versions|yesno:'1,0' }}">
 
     {% if d.to_get %}
@@ -51,7 +59,7 @@
         <tbody>
           {% for e in d.to_get %}
           <tr><td><input type="checkbox" class="cb" name="rel" value="{{ e.rel.id }}" {% if e.rel.status not in 'queued,downloading,in_library' %}checked{% endif %} aria-label="{{ e.rel.title }}"></td>
-            <td><b>{{ e.rel.title }}</b><span class="sub">{{ e.type }}{% if e.grp.version and not d.flags.versions %} · {{ e.grp.version }} {{ e.grp.version|plural:"другая версия выключена,других версии выключены,других версий выключены" }}{% endif %}{% if e.rel.status == 'queued' or e.rel.status == 'downloading' %} · <b>уже в очереди</b>{% endif %}</span></td>
+            <td><b>{{ e.rel.title }}</b><span class="sub">{{ e.type }}{% if e.feat %} · фит{% endif %}{% if e.grp.version and not d.flags.versions %} · {{ e.grp.version }} {{ e.grp.version|plural:"другая версия выключена,других версии выключены,других версий выключены" }}{% endif %}{% if e.rel.status == 'queued' or e.rel.status == 'downloading' %} · <b>уже в очереди</b>{% endif %}</span></td>
             <td class="num">{{ e.rel.release_date|slice:":4" }}</td><td class="num">{{ e.tracks }}</td>
             <td class="num">{% if e.grp.have or e.grp.dup %}{{ e.grp.have|add:e.grp.dup }}{% else %}<span class="muted">—</span>{% endif %}</td>
             <td class="num"><b>{{ e.sel }}</b></td></tr>
@@ -83,6 +91,15 @@
       </tbody>
     </table>
   </div>
+  {% endif %}
+
+  {% if d.feats and not d.flags.feats %}
+  <details class="collapse">
+    <summary><span>Фиты <span class="muted" style="font-weight:400">· {{ d.feats|length }} {{ d.feats|length|plural:"чужой релиз,чужих релиза,чужих релизов" }}, выключены</span></span></summary>
+    <div class="table-wrap"><table><tbody>
+      {% for e in d.feats %}<tr><td><b>{{ e.rel.title }}</b><span class="sub">{{ e.rel.release_date|slice:":4" }} · {{ e.type }}</span></td><td class="num">{{ e.tracks }} {{ e.tracks|plural:"трек,трека,треков" }}</td></tr>{% endfor %}
+    </tbody></table></div>
+  </details>
   {% endif %}
 
   {% if d.versions %}

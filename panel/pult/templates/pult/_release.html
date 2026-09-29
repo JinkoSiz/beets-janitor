@@ -2,10 +2,10 @@
 <article class="rel" id="rel-{{ r.id }}">
   <div class="sleeve{% if r.cover %} has-img{% endif %}" style="background:linear-gradient(140deg,{{ r.title|color }},#15121c)">
     {% if r.cover %}<img src="{{ r.cover }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% endif %}
-    <span class="type">{{ x.type }}</span><b>{{ r.title }}</b>
+    <span class="type">{{ x.type }}{% if r.feat %} · фит{% endif %}</span><b>{{ r.title }}</b>
   </div>
   <div class="rel-body">
-    <div class="rel-artist">{% if r.artist_id %}<a href="/discography/?artist={{ r.artist_id }}" style="color:inherit;text-decoration:none">{{ r.artist }}</a>{% else %}{{ r.artist }}{% endif %}</div>
+    <div class="rel-artist">{% if x.owner %}{{ x.owner }} <span class="muted" style="font-weight:400">· при участии {% endif %}{% if r.artist_id %}<a href="/discography/?artist={{ r.artist_id }}" style="color:inherit;text-decoration:none">{{ r.artist }}</a>{% else %}{{ r.artist }}{% endif %}{% if x.owner %}</span>{% endif %}</div>
     <div class="rel-meta">{{ r.release_date|rudate }}{% if r.tracks_total %} · {{ r.tracks_total }} {{ r.tracks_total|plural:"трек,трека,треков" }}{% endif %}{% if x.have %} · есть {{ x.have }}{% endif %}{% if x.counts.version %} · других версий {{ x.counts.version }}{% endif %}</div>
     <div class="rel-foot">
       <span class="pill {{ x.status.1 }}">{{ x.status.0 }}{% if r.status == 'new' and x.get %} · скачать {{ x.get }}{% endif %}{% if r.status == 'new' and x.counts.ask %} · спросить {{ x.counts.ask }}{% endif %}</span>

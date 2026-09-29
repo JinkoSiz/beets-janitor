@@ -429,9 +429,14 @@ def releases(con, f=None):
     out = []
     for r in rows:
         c = loads(r["counts"], {}) or {}
+        owner = None
+        if r["feat"]:
+            # у фита хозяин — главный исполнитель дорожек, а не тот, за кем следим
+            t = con.execute("SELECT info FROM release_tracks WHERE release_id=? LIMIT 1", (r["id"],)).fetchone()
+            owner = (loads(t["info"], {}) or {}).get("artist") if t else None
         out.append({"row": r, "counts": c, "status": REL_STATUS.get(r["status"], (r["status"], "")),
                     "type": TYPE_TEXT.get(r["type"], r["type"] or ""), "get": c.get("get", 0),
-                    "have": c.get("have", 0) + c.get("dup", 0)})
+                    "have": c.get("have", 0) + c.get("dup", 0), "owner": owner})
     return out
 
 
@@ -476,7 +481,7 @@ def artist_counts(con):
 
 
 # ---------------------------------------------------------------- дискография
-def discography(con, artist_id, albums=True, singles=True, versions=False):
+def discography(con, artist_id, albums=True, singles=True, versions=False, feats=True):
     a = con.execute("SELECT * FROM artists WHERE id=?", (artist_id,)).fetchone()
     if a is None:
         return None
@@ -485,10 +490,12 @@ def discography(con, artist_id, albums=True, singles=True, versions=False):
     import discography as disco
     total = {"have": 0, "dup": 0, "version": 0, "ask": 0, "get": 0}
     to_get, asks, vers, full = [], [], [], []
+    feat_list = []
     for r in rels:
         tracks = con.execute("SELECT * FROM release_tracks WHERE release_id=? ORDER BY id", (r["id"],)).fetchall()
         is_single = r["type"] in ("single", "ep")
-        allowed = (singles if is_single else albums)
+        is_feat = bool(r["feat"])
+        allowed = (singles if is_single else albums) and (feats or not is_feat)
         grp = {"have": 0, "dup": 0, "version": 0, "ask": 0, "get": 0}
         sel = 0
         for t in tracks:
@@ -503,7 +510,9 @@ def discography(con, artist_id, albums=True, singles=True, versions=False):
         for k in total:
             total[k] += grp.get(k, 0)
         entry = {"rel": r, "grp": grp, "sel": sel, "tracks": len(tracks), "type": TYPE_TEXT.get(r["type"], r["type"]),
-                 "allowed": allowed}
+                 "allowed": allowed, "feat": is_feat}
+        if is_feat:
+            feat_list.append(entry)
         # разделы не исключают друг друга: у Deluxe бывают и бонусы к
         # скачиванию, и инструменталы среди других версий
         if sel:
@@ -516,8 +525,8 @@ def discography(con, artist_id, albums=True, singles=True, versions=False):
     selected = sum(e["sel"] for e in to_get)
     return {"artist": a, "total": total, "n": sum(total.values()), "selected": selected,
             "pct": {k: round(100.0 * v / n, 1) for k, v in total.items()},
-            "to_get": to_get, "asks": asks, "versions": vers, "full": full,
-            "flags": {"albums": albums, "singles": singles, "versions": versions}}
+            "to_get": to_get, "asks": asks, "versions": vers, "full": full, "feats": feat_list,
+            "flags": {"albums": albums, "singles": singles, "versions": versions, "feats": feats}}
 
 
 def job(con, job_id):

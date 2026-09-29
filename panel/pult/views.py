@@ -331,7 +331,9 @@ def discography(request):
     aid = request.GET.get("artist")
     ctx = {"q": request.GET.get("q", "")}
     if aid and aid.isdigit():
-        flags = {k: request.GET.get(k, "1" if k != "versions" else "0") == "1" for k in ("albums", "singles", "versions")}
+        # по умолчанию всё, кроме инструменталов и прочих версий; фиты включены
+        flags = {k: request.GET.get(k, "1" if k != "versions" else "0") == "1"
+                 for k in ("albums", "singles", "versions", "feats")}
         ctx["d"] = data.discography(con, int(aid), **flags)
         ctx["jobs_running"] = con.execute("SELECT id FROM jobs WHERE status='running' AND json_extract(params, '$.artist_id')=?",
                                           (int(aid),)).fetchone()

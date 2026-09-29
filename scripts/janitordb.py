@@ -164,6 +164,7 @@ CREATE TABLE IF NOT EXISTS releases (
     decided_at    TEXT,
     cover         TEXT,
     link          TEXT,
+    feat          INTEGER,                 -- 1 — чужой релиз, исполнитель в нём гость
     UNIQUE(provider, provider_id)
 );
 CREATE INDEX IF NOT EXISTS releases_status ON releases(status, release_date);
@@ -242,7 +243,7 @@ def connect(path=None):
 # только через ALTER, который и делается здесь, если колонки ещё нет.
 ADDED_COLUMNS = {
     "artists": [("deezer_name", "TEXT"), ("picture", "TEXT"), ("info", "TEXT")],
-    "releases": [("cover", "TEXT"), ("link", "TEXT")],
+    "releases": [("cover", "TEXT"), ("link", "TEXT"), ("feat", "INTEGER")],
     "release_tracks": [("decision", "TEXT"), ("info", "TEXT")],
 }
 

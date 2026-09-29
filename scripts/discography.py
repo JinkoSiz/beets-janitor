@@ -299,9 +299,11 @@ class Resolver:
         dur = int(t.get("duration") or 0)
         title = str(t.get("title") or "")
         key = norm_title(title)
+        who = t.get("artist") or {}
         out = {"provider_id": tid, "isrc": isrc or None, "title": title, "duration": dur,
                "verdict": None, "library_item": None, "similarity": None,
-               "info": {"preview": t.get("preview"), "version": t.get("title_version") or None}}
+               "info": {"preview": t.get("preview"), "version": t.get("title_version") or None,
+                        "artist": who.get("name"), "artist_id": str(who.get("id") or "") or None}}
 
         is_marked = marked(title, t.get("title_version"), release.get("title"))
 
@@ -378,12 +380,24 @@ def resolve(artist_id, artist_name, lib, ok_t=0.85, releases=None, progress=None
     for n, r in enumerate(rels, 1):
         if progress:
             progress(n, len(rels), r.get("title"))
-        tracks = [res.track(t, r) for t in tracks_of(r["id"])]
+        raw = tracks_of(r["id"])
+        tracks = [res.track(t, r) for t in raw]
         out.append({"provider": "deezer", "provider_id": str(r["id"]), "title": r.get("title"),
                     "type": r.get("record_type"), "release_date": r.get("release_date"),
                     "tracks_total": len(tracks), "cover": r.get("cover_medium"), "link": r.get("link"),
-                    "tracks": tracks, "counts": counts(tracks)})
+                    "tracks": tracks, "counts": counts(tracks), "feat": is_feat(raw, artist_id)})
     return out
+
+
+def is_feat(raw_tracks, artist_id):
+    """Фит — чужой релиз, где исполнитель только гость.
+
+    Deezer кладёт такие синглы в дискографию гостя, а главным исполнителем
+    у каждой дорожки стоит хозяин релиза: «Jealous» — 9mice, madk1d в гостях.
+    Навидром потом покажет релиз под хозяином, а не под тем, чью дискографию
+    разбирали.
+    """
+    return bool(raw_tracks) and all(str((t.get("artist") or {}).get("id")) != str(artist_id) for t in raw_tracks)
 
 
 # ---------------------------------------------------------------- хранение
@@ -401,13 +415,14 @@ def store(con, artist_id, rels, status):
         c = json.dumps(r["counts"], ensure_ascii=False)
         row = con.execute("SELECT id FROM releases WHERE provider=? AND provider_id=?",
                           (r["provider"], r["provider_id"])).fetchone()
+        feat = None if r.get("feat") is None else int(bool(r["feat"]))
         if row is None:
             st = status(r) if callable(status) else status
             rid = con.execute(
                 "INSERT INTO releases(artist_id, provider, provider_id, title, type, release_date, tracks_total, "
-                "status, counts, found_at, cover, link) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "status, counts, found_at, cover, link, feat) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (artist_id, r["provider"], r["provider_id"], r["title"], r["type"], r["release_date"],
-                 r["tracks_total"], st, c, jdb.now(), r.get("cover"), r.get("link"))).lastrowid
+                 r["tracks_total"], st, c, jdb.now(), r.get("cover"), r.get("link"), feat)).lastrowid
         else:
             rid = row["id"]
             con.execute("UPDATE releases SET title=?, type=?, release_date=?, cover=?, link=?, "
@@ -415,7 +430,8 @@ def store(con, artist_id, rels, status):
                         (r["title"], r["type"], r["release_date"], r.get("cover"), r.get("link"), artist_id, rid))
             # релиз без разбора дорожек (release_row) прежний разбор не затирает
             if r.get("tracks"):
-                con.execute("UPDATE releases SET tracks_total=?, counts=? WHERE id=?", (r["tracks_total"], c, rid))
+                con.execute("UPDATE releases SET tracks_total=?, counts=?, feat=? WHERE id=?",
+                            (r["tracks_total"], c, feat, rid))
         for t in r.get("tracks") or []:
             con.execute(
                 "INSERT INTO release_tracks(release_id, provider_id, isrc, title, duration, verdict, library_item, "
