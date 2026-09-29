@@ -410,7 +410,8 @@ def can_rollback(ev, before):
     if ev["op"] in ("quarantine", "move", "rename"):
         return True
     return isinstance(before, dict) and bool(ev["item_id"]) and any(
-        k in before for k in ("album", "albumartist", "artist", "title", "year", "disc", "track", "comp", "mb_trackid"))
+        k in before for k in ("album", "albumartist", "artist", "title", "year", "disc", "track", "comp", "mb_trackid",
+                              "original_year"))
 
 
 # ---------------------------------------------------------------- новинки и исполнители

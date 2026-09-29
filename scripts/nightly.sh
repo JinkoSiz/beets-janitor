@@ -264,6 +264,10 @@ nightly_body() {
   echo "=== $(date '+%F %T') кодировка тегов"
   step fixenc 3600 python3 "$SCRIPTS"/fixenc.py "$LIBRARY"
   step "beet update" 3600 beet update -M
+  # то, что пришло мимо incoming (library_scan), тоже доводим
+  if [ -f "$SCRIPTS"/postimport.py ]; then
+    step postimport 900 python3 "$SCRIPTS"/postimport.py
+  fi
   step fixnames 1800 python3 "$SCRIPTS"/fixnames.py
   echo "=== $(date '+%F %T') добивание as-is"
   step retry 18000 python3 "$SCRIPTS"/retry.py
@@ -333,6 +337,11 @@ while true; do
       JANITOR_RUN_ID=$RUN_ID
       export JANITOR_RUN_ID
       step import 7200 process_incoming
+      # доводка свежего: Various Artists от downtify -> настоящий исполнитель,
+      # исходная дата для сортировки в плеере
+      if [ -f "$SCRIPTS"/postimport.py ]; then
+        step postimport 900 python3 "$SCRIPTS"/postimport.py
+      fi
       # свежие импорты — сразу на сверку с превью: подмену в новой закачке
       # лучше увидеть сегодня, а не когда до неё дойдёт ночная очередь
       if [ -f "$SCRIPTS"/verify.py ]; then

@@ -52,7 +52,8 @@ RUN_FLAG = env.RUN_FLAG
 # поля beets, которые разрешено возвращать откатом: только теги дорожки,
 # а не служебные (id, path, album_id меняются своими действиями)
 ROLLBACK_FIELDS = {"album", "albumartist", "artist", "title", "year", "month", "day", "disc",
-                   "disctotal", "track", "comp", "mb_trackid", "mb_albumid", "data_source", "label", "genre"}
+                   "disctotal", "track", "comp", "mb_trackid", "mb_albumid", "data_source", "label", "genre",
+                   "original_year", "original_month", "original_day"}
 
 
 class Refused(Exception):
