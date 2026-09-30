@@ -293,7 +293,11 @@ large library walks straight into HTTP 429 on its first night.
 
 * It does not download music by itself. Downloads are handed to
   [downtify](https://github.com/henriquesebastiao/downtify); without it,
-  whatever you put in `incoming` is the input.
+  whatever you put in `incoming` is the input. Set downtify's output template
+  to `{artists} - {album} - {title}.{output-ext}`: with the default
+  `{artists} - {title}` two releases carrying same-named tracks («Untitled
+  (one)» on vol. 1 and vol. 2) write to the same file, and downtify
+  overwrites the first one before it is imported.
 * It does not edit what it isn't sure about. Ambiguous cases become questions
   in the panel, not operations.
 * It does not replace or patch beets. It sits next to it; beets stays stock.

@@ -8,7 +8,11 @@ incoming. Сторож пытался бы импортировать его к�
 26–28 сентября 2026: застрял один трек, и три ночи прошли впустую.
 
 Дублем beets считает то же сочетание «исполнитель + название», звук он не
-слушает. А разные версии одной песни мы не убираем (решение от 2026-09-22):
+слушает. Исполнителя он при этом берёт уже из найденного совпадения, а в
+тегах файла он записан по-своему: downtify пишет «YCK;Dąber», в фонотеке
+«YCK, Dąber». Поэтому имеющееся ищем по названию и по отдельным именам
+исполнителей, а не по строке целиком.
+А разные версии одной песни мы не убираем (решение от 2026-09-22):
 застрявший тогда трек оказался длиннее имеющегося на сорок секунд. Поэтому
 каждый оставшийся файл сравниваем по звуку с тем, что уже есть:
 
@@ -30,6 +34,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import discography as disco  # noqa: E402
 import env  # noqa: E402
 import janitordb as jdb  # noqa: E402
 from dedup import FP_MIN, LEN_TOLERANCE, same_audio  # noqa: E402
@@ -56,6 +61,41 @@ def tags(path):
         return str(m.artist or ""), str(m.title or ""), float(m.length or 0)
     except Exception:
         return "", "", 0.0
+
+
+def artist_keys(s):
+    """Имена исполнителей по отдельности: «YCK;Dąber» и «YCK, Dąber» — одно и то же."""
+    out = set()
+    for n in disco.artist_names(s):
+        out |= disco.name_keys(n)
+    return out
+
+
+class Titles:
+    """Дорожки фонотеки по названию: буква в букву и без скобок и хвоста « - …»."""
+
+    def __init__(self, items):
+        self.exact, self.loose = {}, {}
+        for it in items:
+            t = str(it.title)
+            self.exact.setdefault(t.strip().lower(), []).append(it)
+            for k in disco.title_keys(t):
+                self.loose.setdefault(k, []).append(it)
+
+    def twins(self, artist, title):
+        """Дорожки, из-за которых beets мог счесть файл дублем.
+
+        Сначала то же название буква в букву, иначе — без скобок и хвоста:
+        совпадение beets мог взять с немного другим названием. Дальше всё
+        равно решает сравнение звука.
+        """
+        mine = artist_keys(artist)
+        for found in ([self.exact.get(title.strip().lower(), [])],
+                      [self.loose.get(k, []) for k in disco.title_keys(title)]):
+            out = disco.unique(i for group in found for i in group if artist_keys(i.artist) & mine)
+            if out:
+                return out
+        return []
 
 
 def park(con, path, reason, sim=None, kept=None, artist=None, title=None):
@@ -102,19 +142,16 @@ def main():
         return
     import retry
     lib = retry.open_library()
-    by_key = {}
-    for it in lib.items(""):
-        by_key.setdefault((str(it.artist).strip().lower(), str(it.title).strip().lower()), []).append(it)
+    titles = Titles(lib.items(""))
     con = None if DRY else jdb.connect()
 
     parked = imported = waiting = 0
     for f in files:
         artist, title, length = tags(f)
         rel = os.path.relpath(f, env.INCOMING_DIR)
-        same = by_key.get((artist.strip().lower(), title.strip().lower()), [])
-        same = [i for i in same if os.path.isfile(i.path.decode("utf-8", "replace"))]
+        age = (time.time() - os.path.getmtime(f)) / 3600
+        same = [i for i in titles.twins(artist, title) if os.path.isfile(i.path.decode("utf-8", "replace"))]
         if not same:
-            age = (time.time() - os.path.getmtime(f)) / 3600
             if age < STALE_HOURS:
                 print("-- не импортирован, жду следующей попытки (%.0f ч): %s" % (age, rel))
                 waiting += 1
@@ -143,6 +180,12 @@ def main():
             print("-- другая версия (%s) -> %s: %s\n     рядом с: %s"
                   % (why, "импортирована" if ok else "НЕ импортирована", rel, env.in_music(other)))
             imported += ok
+            if not ok and age >= STALE_HOURS:
+                # не взялся и с keep — не держать им incoming: ночная работа
+                # ждёт, пока он опустеет
+                park(con, f, "import_failed", artist=artist, title=title)
+                print("-- не импортируется дольше суток -> карантин: %s" % rel)
+                parked += 1
 
     print("остатки incoming: в карантин %d, импортировано как другая версия %d, ждут %d"
           % (parked, imported, waiting))
