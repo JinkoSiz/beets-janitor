@@ -132,6 +132,8 @@ def note_track(con, t, sid, searched=True):
         info["spotify_id"] = sid
     else:
         info.pop("spotify_id", None)
+    # сбой прошлой попытки (follow.py) к новой отношения не имеет
+    info.pop("fetch_error", None)
     con.execute("UPDATE release_tracks SET info=? WHERE id=?", (json.dumps(info, ensure_ascii=False), t["id"]))
 
 

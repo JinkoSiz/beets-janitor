@@ -20,8 +20,14 @@ follow_new_days (60 дней); качается оно, как и любая н�
 auto_download. Остальное запоминается как известное, иначе в «Новинки» разом
 высыпалась бы вся дискография. Недостающее из старого — это «Дискография».
 
+Скачивание, которому помешал YouTube или downtify, ночью повторяется само —
+не больше RETRY_MAX попыток на релиз.
+
   follow.py [--dry] [--artist ИМЯ]
   follow.py --arrivals     только отметить скачанные релизы, доехавшие до фонотеки
+  follow.py --watch        то же между разборами incoming, пока что-то качается:
+                           упавшее в downtify сразу становится «не скачалось»
+  follow.py --retry        повторить сейчас то, чему помешал YouTube или downtify
   follow.py --catch-up     разово: свежие релизы, которые прежняя версия при
                            первой проверке записала известными, — в новинки
 """
@@ -35,12 +41,15 @@ from collections import Counter, defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import discography as disco  # noqa: E402
+import env  # noqa: E402
 import janitordb as jdb  # noqa: E402
 
 DRY = "--dry" in sys.argv
 RESOLVE_PER_RUN = 40      # столько новых исполнителей опознаём в Deezer за ночь
 NEW_DAYS = 60             # релиз старше — не новинка, а поздно добавленный старый
 ARRIVE_HOURS = 6          # скачанное не доехало до фонотеки за столько — «не скачалось»
+RETRY_MAX = 3             # попыток скачать релиз, считая первую; дальше решать в пульте
+BOT = re.compile(r"not a bot|sign in to confirm", re.I)
 VA = {"various artists", "various", "va", "сборник", "разные исполнители", "v a"}
 
 
@@ -257,15 +266,71 @@ def titles(tracks):
     return ", ".join(names) + (" и ещё %d" % (len(tracks) - 4) if len(tracks) > 4 else "")
 
 
+def downtify_queue():
+    """Что downtify знает о песнях: {id трека Spotify: (статус, сообщение)}.
+
+    Очередь живёт в памяти downtify до его перезапуска; у повторённой песни
+    в ней несколько записей — берём последнюю. Не ответил — пусто.
+    """
+    import requests
+    try:
+        q = requests.get(env.DOWNTIFY_URL + "/api/queue", timeout=30).json()
+    except Exception:
+        return {}
+    out = {}
+    for i in q if isinstance(q, list) else []:
+        sid = (i.get("song") or {}).get("song_id")
+        if sid:
+            out[sid] = (str(i.get("status") or ""), str(i.get("message") or ""))
+    return out
+
+
+def fetch_error(message):
+    """Причина из сообщения downtify: (вид, текст для пульта)."""
+    if BOT.search(message):
+        return "youtube", "YouTube временно не отдаёт звук (просит подтвердить, что не бот)"
+    m = re.sub(r"^(error:\s*)+", "", message.strip(), flags=re.I)
+    return "downtify", "downtify: %s" % (m[:120] or "ошибка")
+
+
+def attempts(con, release_id):
+    return con.execute("SELECT count(*) FROM actions WHERE kind='download' "
+                       "AND json_extract(payload, '$.release_id')=?", (release_id,)).fetchone()[0]
+
+
+def retry_failed(con):
+    """Повторить скачивание, которому помешал YouTube или downtify.
+
+    Такие сбои проходят сами: YouTube после пачки закачек просит
+    «подтвердить, что не бот», а через несколько часов отпускает. Не больше
+    RETRY_MAX попыток на релиз. То, чего нет в Spotify, и то, что скачалось,
+    но не доехало до фонотеки, повтором не лечится. Вернуть число релизов.
+    """
+    n = 0
+    for rel in con.execute("SELECT id, title FROM releases WHERE status='failed' ORDER BY id").fetchall():
+        kinds = {(jdb.loads(t["info"], {}) or {}).get("fetch_error")
+                 for t in con.execute("SELECT info FROM release_tracks WHERE release_id=?", (rel["id"],))}
+        if not kinds & {"youtube", "downtify"} or attempts(con, rel["id"]) >= RETRY_MAX:
+            continue
+        n += 1
+        print("   ~ повторю: %s" % rel["title"][:60])
+        if not DRY:
+            jdb.enqueue(con, "download", {"release_id": rel["id"], "retry": 1})
+            con.execute("UPDATE releases SET status='queued', note=NULL WHERE id=?", (rel["id"],))
+    return n
+
+
 def recheck_downloads(con, lib):
     """Скачанное доехало до фонотеки? Тогда релиз — «в фонотеке».
 
-    Не доехавшее за ARRIVE_HOURS, найденное в Spotify не целиком и релизы,
-    чьё скачивание упало, — «не скачалось» с причиной. Доедет позже — всё
-    равно станет «в фонотеке». Вернуть (в фонотеку, не скачалось).
+    Иначе — «не скачалось» с причиной, как только она ясна: downtify сообщил
+    об ошибке, в Spotify нашлось не всё, скачивание упало, скачанное не
+    доехало за ARRIVE_HOURS. Доедет позже — всё равно станет «в фонотеке».
+    Вернуть (в фонотеку, не скачалось).
     """
     moved = failed = 0
     now = datetime.datetime.now()
+    queue = None
 
     def put(rel, status, note):
         if not DRY:
@@ -296,15 +361,38 @@ def recheck_downloads(con, lib):
             continue
         if rel["status"] != "downloading":
             continue
+        if queue is None:
+            queue = downtify_queue()
+        broken = {}
+        for t in rest:
+            st = queue.get((jdb.loads(t["info"], {}) or {}).get("spotify_id") or "")
+            if st and st[0] == "error":
+                broken[t["id"]] = fetch_error(st[1])
         lost = [t for t in rest if not_in_spotify(t)]
-        late = [t for t in rest if t not in lost]
+        late = [t for t in rest if t["id"] not in broken and not not_in_spotify(t)]
         since = parse_ts(rel["decided_at"])
         if late and since is not None and now - since < datetime.timedelta(hours=ARRIVE_HOURS):
             continue
         failed += 1
-        put(rel, "failed", "; ".join(x for x in (
-            lost and "в Spotify не нашлось: " + titles(lost),
-            late and "не доехало до фонотеки: " + titles(late)) if x))
+        parts = []
+        for why in sorted(set(broken.values())):
+            ts = [t for t in rest if broken.get(t["id"]) == why]
+            parts.append(why[1] if len(ts) == len(tracks) else "%s: %s" % (why[1], titles(ts)))
+        if lost:
+            parts.append("в Spotify не нашлось: " + titles(lost))
+        if late:
+            parts.append("не доехало до фонотеки: " + titles(late))
+        if broken and attempts(con, rel["id"]) < RETRY_MAX:
+            parts.append("повторю ночью")
+        if not DRY:
+            # вид сбоя — у дорожки: по нему ночью решается, повторять ли
+            for t in rest:
+                if t["id"] in broken:
+                    info = jdb.loads(t["info"], {}) or {}
+                    info["fetch_error"] = broken[t["id"]][0]
+                    con.execute("UPDATE release_tracks SET info=? WHERE id=?",
+                                (json.dumps(info, ensure_ascii=False), t["id"]))
+        put(rel, "failed", "; ".join(parts))
     return moved, failed
 
 
@@ -322,9 +410,27 @@ def main():
             with open(os.environ["JANITOR_STATS_OUT"], "w", encoding="utf-8") as f:
                 json.dump({"arrived": arrived, "failed": failed}, f)
         return
+    if "--watch" in sys.argv:
+        # между разборами incoming: пока что-то качается, смотрим, не упало
+        # ли оно в downtify; пишем в лог только перемены
+        if con.execute("SELECT 1 FROM releases WHERE status='downloading' LIMIT 1").fetchone():
+            recheck_downloads(con, disco.Library())
+        return
+    if "--retry" in sys.argv:
+        n = retry_failed(con)
+        print("повторить скачивание: %d" % n)
+        if n and not DRY:
+            # сторож не ждёт конца паузы: скачивание уйдёт на следующем круге
+            open(env.WAKE, "w").close()
+        return
     if "--catch-up" in sys.argv:
         catch_up(con, disco.Library(), float(jdb.setting(con, "ref_ok")))
         return
+    # сбои YouTube и downtify проходят сами — ночью повторяем, и при
+    # выключенном слежении тоже: скачивание могло прийти из «Дискографии»
+    retried = 0 if only else retry_failed(con)
+    if retried:
+        print("повторю скачивание, которому мешал YouTube или downtify: %d" % retried)
     if jdb.setting(con, "follow_enabled") != "1" and not only:
         print("слежение выключено в настройках")
         return
@@ -360,7 +466,7 @@ def main():
     if stats_out and not DRY:
         with open(stats_out, "w", encoding="utf-8") as f:
             json.dump({"artists": len(rows), "added": added, "resolved": done, "unclear": unclear,
-                       "new": new, "queued": queued, "arrived": arrived, "failed": failed}, f)
+                       "new": new, "queued": queued, "arrived": arrived, "failed": failed, "retried": retried}, f)
 
 
 if __name__ == "__main__":

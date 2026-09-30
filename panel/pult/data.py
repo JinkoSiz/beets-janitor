@@ -121,8 +121,9 @@ STEP_TEXT = {
         s.get("dupes", 0), s.get("merged", 0), s.get("discs", 0) + s.get("discs_multi", 0), s.get("unsure", 0) + s.get("alien", 0)),
     "verify": lambda s: "сверено <b>%d</b>, подмен <b>%d</b>, спорных %d" % (
         sum(v for k, v in s.items() if k not in ("new", "backlog")), s.get("substitution", 0), s.get("unsure", 0)),
-    "follow": lambda s: "исполнителей %d, новинок <b>%d</b>, в очередь %d%s" % (
+    "follow": lambda s: "исполнителей %d, новинок <b>%d</b>, в очередь %d%s%s" % (
         s.get("artists", 0), s.get("new", 0), s.get("queued", 0),
+        ", повтор %d" % s["retried"] if s.get("retried") else "",
         ", не скачалось <b>%d</b>" % s["failed"] if s.get("failed") else ""),
     "arrivals": lambda s: "доехало релизов <b>%d</b>%s" % (
         s.get("arrived", 0), ", не скачалось <b>%d</b>" % s["failed"] if s.get("failed") else ""),

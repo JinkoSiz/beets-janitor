@@ -361,6 +361,11 @@ while true; do
   elif [ "$n" -gt 0 ]; then
     echo "=== $(date '+%F %T') incoming меняется ($cur), жду"
     beat "incoming ещё наполняется: $n файлов"
+  elif [ -f "$SCRIPTS"/follow.py ]; then
+    # пока что-то качается, смотрим в очередь downtify: упавшее там сразу
+    # станет «не скачалось» с причиной, а не будет висеть «качается» — в
+    # incoming от такого скачивания ничего не придёт, и разбор его не увидит
+    run 300 python3 "$SCRIPTS"/follow.py --watch
   fi
 
   # ночная работа: пробуем начиная с NIGHTLY_HOUR и повторяем, пока не

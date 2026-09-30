@@ -242,6 +242,20 @@ def release_get_all(request):
 
 
 @require_POST
+def release_retry_all(request):
+    """Все «не скачалось» — ещё раз, докачивая только недостающее."""
+    con = data.jcon()
+    n = 0
+    for r in con.execute("SELECT id FROM releases WHERE status='failed'").fetchall():
+        data.enqueue(con, "download", {"release_id": r["id"], "retry": 1})
+        con.execute("UPDATE releases SET status='queued', decided_at=?, note=NULL WHERE id=?", (jdb.now(), r["id"]))
+        n += 1
+    resp = toast(HttpResponse(""), "Повторю скачивание: %d" % n)
+    resp["HX-Redirect"] = "/releases/?f=work"
+    return resp
+
+
+@require_POST
 def release_skip(request, rel_id):
     con = data.jcon()
     con.execute("UPDATE releases SET status='skipped', decided_at=? WHERE id=?", (jdb.now(), rel_id))
