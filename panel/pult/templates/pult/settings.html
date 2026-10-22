@@ -31,6 +31,14 @@
       <div class="set-row"><span>Сверять за ночь, дорожек</span><span class="row"><input type="number" name="value" value="{{ v.verify_limit }}" style="width:96px" aria-label="Лимит сверки" hx-post="/settings/set" hx-vals='{"key":"verify_limit"}' hx-trigger="change" hx-swap="none"></span></div>
     </div>
     <div class="panel set">
+      <h2>Цензура стримингов</h2>
+      <p>На стримингах в русских релизах глушат упоминания наркотиков. Ночью русские треки сверяются с загрузками времени релиза на YouTube: если два источника показали одно и то же заглушённое место, звук заменяется оригиналом. Старый файл уходит в карантин, откат делается в журнале.</p>
+      <div class="set-row"><span>Проверять ночью</span><label class="switch"><input type="checkbox" {% if censor_enabled %}checked{% endif %} aria-label="Проверять цензуру" hx-post="/flag" hx-vals='js:{key:"censor_enabled", value: event.target.checked ? 1 : 0}' hx-swap="none"><span></span></label></div>
+      <div class="set-row"><span>Подтверждённое заменять сразу, без вопроса</span><label class="switch"><input type="checkbox" {% if censor_auto %}checked{% endif %} aria-label="Заменять сразу" hx-post="/flag" hx-vals='js:{key:"censor_auto", value: event.target.checked ? 1 : 0}' hx-swap="none"><span></span></label></div>
+      <div class="set-row"><span>Проверять за ночь, дорожек</span><span class="row"><input type="number" name="value" value="{{ v.censor_limit }}" style="width:96px" aria-label="Лимит проверки цензуры" hx-post="/settings/set" hx-vals='{"key":"censor_limit"}' hx-trigger="change" hx-swap="none"></span></div>
+      {% if censor %}<p class="muted" style="margin:8px 0 0">Проверено: чисто {{ censor.clean|default:0 }}, оригинал и был {{ censor.original|default:0 }}, заменено {{ censor.replaced|default:0 }}, ждёт решения {{ censor.wait }}, без оригинала {{ censor.no_ref|default:0 }}.</p>{% endif %}
+    </div>
+    <div class="panel set">
       <h2>Карантин и новинки</h2>
       <div class="set-row"><span>Хранить копии</span><span class="row"><input type="number" name="value" value="{{ v.dupes_days }}" aria-label="Дней хранить копии" hx-post="/settings/set" hx-vals='{"key":"dupes_days"}' hx-trigger="change" hx-swap="none"><span class="muted">дн.</span></span></div>
       <div class="set-row"><span>Хранить мусор и битые</span><span class="row"><input type="number" name="value" value="{{ v.junk_days }}" aria-label="Дней хранить мусор" hx-post="/settings/set" hx-vals='{"key":"junk_days"}' hx-trigger="change" hx-swap="none"><span class="muted">дн.</span></span></div>

@@ -73,7 +73,10 @@ DECISION_TEXT = {
     "keep_both": "оставлены обе копии", "different": "оставлены обе: разные песни или версии",
     "accept": "кандидат будет принят, теги перепишутся", "never": "больше не искать",
     "asis": "оставлено как есть", "replace": "звук заменится загруженным файлом", "dismiss": "вопрос снят",
+    "uncensor": "звук заменится оригиналом без цензуры", "keep_censored": "оставлено как есть",
 }
+
+CARD_TPL = {"asis": "pult/_asis_row.html", "censored": "pult/_censor_card.html"}
 
 
 def _card(request, con, rid):
@@ -90,7 +93,7 @@ def _card(request, con, rid):
 
 def review(request):
     tab = request.GET.get("tab", "subs")
-    kind = {"subs": "substitution", "dups": "duplicate", "asis": "asis"}.get(tab, "substitution")
+    kind = {"subs": "substitution", "dups": "duplicate", "asis": "asis", "cens": "censored"}.get(tab, "substitution")
     con = data.jcon()
     return render(request, "pult/review.html", {
         "tab": tab, "cards": data.review_cards(con, kind), "counts": data.review_counts(con),
@@ -130,14 +133,26 @@ def review_decide(request, rid):
             data.enqueue(con, "accept", {"item_id": p.get("item_id"), "track_id": cand["track_id"]}, rid)
         elif decision not in ("never", "asis", "dismiss"):
             return HttpResponseBadRequest()
+    elif kind == "censored":
+        if decision == "uncensor":
+            f = p.get("file")
+            if not f or not data.inside(f, env.UPLOADS_DIR) or not os.path.isfile(f):
+                return toast(HttpResponse(""), "Звука оригинала уже нет — замените вручную загрузкой файла")
+            data.enqueue(con, "replace", {"item_id": p.get("item_id"), "file": f, "by": "panel",
+                                          "censor": {"spots": p.get("spots"), "source": p.get("source")}}, rid)
+        elif decision == "keep_censored":
+            # оставлено как есть: uncensor.py больше не спрашивает про этот файл
+            con.execute("UPDATE censor SET verdict='kept', checked_at=? WHERE item_id=?", (jdb.now(), p.get("item_id")))
+        elif decision != "dismiss":
+            return HttpResponseBadRequest()
     else:
         return HttpResponseBadRequest()
 
     con.execute("UPDATE reviews SET status='resolved', decision=?, decided_at=? WHERE id=?",
                 (decision, jdb.now(), rid))
     c = _card(request, con, rid)
-    tpl = "pult/_asis_row.html" if kind == "asis" else "pult/_card.html"
-    return toast(render(request, tpl, {"c": c, "resolved_text": DECISION_TEXT.get(decision, decision)}),
+    return toast(render(request, CARD_TPL.get(kind, "pult/_card.html"),
+                        {"c": c, "resolved_text": DECISION_TEXT.get(decision, decision)}),
                  "Решено: " + DECISION_TEXT.get(decision, decision))
 
 
@@ -151,8 +166,11 @@ def review_undo(request, rid):
                 (jdb.now(), rid))
     con.execute("UPDATE reviews SET status='open', decision=NULL, decided_at=NULL WHERE id=?", (rid,))
     c = _card(request, con, rid)
-    return toast(render(request, "pult/_card.html", {"c": c, "ref_ok": float(jdb.setting(con, "ref_ok")),
-                                                     "ref_bad": float(jdb.setting(con, "ref_bad"))}),
+    if c["row"]["kind"] == "censored":
+        # «оставить» отменено — вопрос снова открыт, uncensor.py его не трогает
+        con.execute("UPDATE censor SET verdict='censored' WHERE item_id=? AND verdict='kept'", (c["p"].get("item_id"),))
+    return toast(render(request, CARD_TPL.get(c["row"]["kind"], "pult/_card.html"),
+                        {"c": c, "ref_ok": float(jdb.setting(con, "ref_ok")), "ref_bad": float(jdb.setting(con, "ref_bad"))}),
                  "Решение отменено")
 
 
@@ -265,13 +283,15 @@ def release_skip(request, rel_id):
 @require_POST
 def set_flag(request):
     key = request.POST.get("key")
-    if key not in ("auto_download", "follow_enabled"):
+    if key not in ("auto_download", "follow_enabled", "censor_enabled", "censor_auto"):
         return HttpResponseBadRequest()
     on = request.POST.get("value") in ("1", "on", "true")
     con = data.jcon()
     jdb.set_setting(con, key, "1" if on else "0")
     text = {"auto_download": ("Новинки будут качаться сразу", "Новинки ждут подтверждения"),
-            "follow_enabled": ("Слежение за новинками включено", "Слежение за новинками выключено")}[key]
+            "follow_enabled": ("Слежение за новинками включено", "Слежение за новинками выключено"),
+            "censor_enabled": ("Проверка цензуры включена", "Проверка цензуры выключена"),
+            "censor_auto": ("Подтверждённая цензура заменяется сразу", "Цензура только вопросом в пульте")}[key]
     return toast(HttpResponse(status=204), text[0] if on else text[1])
 
 
@@ -548,8 +568,15 @@ SETTINGS = {
     "fp_same": (PCT, 50, 99), "fp_same_short": (PCT, 50, 99), "fp_ask": (PCT, 40, 95),
     "ref_ok": (PCT, 60, 99), "ref_bad": (PCT, 30, 90),
     "dupes_days": (int, 1, 90), "junk_days": (int, 1, 30), "verify_limit": (int, 0, 5000),
-    "follow_min_tracks": (int, 1, 200), "follow_new_days": (int, 7, 365),
+    "follow_min_tracks": (int, 1, 200), "follow_new_days": (int, 7, 365), "censor_limit": (int, 0, 2000),
 }
+
+
+def _censor_counts(con):
+    c = {r["verdict"]: r["n"] for r in con.execute("SELECT verdict, count(*) n FROM censor GROUP BY verdict")}
+    if c:
+        c["wait"] = c.get("censored", 0) + c.get("suspect", 0)
+    return c
 
 
 def settings_view(request):
@@ -561,6 +588,9 @@ def settings_view(request):
     return render(request, "pult/settings.html", {
         "v": vals, "follow_enabled": jdb.setting(con, "follow_enabled") == "1",
         "auto_download": jdb.setting(con, "auto_download") == "1",
+        "censor_enabled": jdb.setting(con, "censor_enabled") == "1",
+        "censor_auto": jdb.setting(con, "censor_auto") == "1",
+        "censor": _censor_counts(con),
         "env": [("MUSIC_DIR", env.MUSIC_DIR), ("INCOMING_DIR", env.INCOMING_DIR), ("RESIDUE_DIR", env.RESIDUE_DIR),
                 ("CONFIG_DIR", env.CONFIG_DIR), ("JANITOR_DIR", env.JANITOR_DIR),
                 ("LOOSE_DIRS", ", ".join(p.strip("/") for p in env.LOOSE_DIRS)),
@@ -637,6 +667,16 @@ def audio_item(request, iid):
     if not data.inside(path, env.MUSIC_DIR) or not os.path.isfile(path):
         raise Http404
     return _stream(request, path)
+
+
+def audio_upload(request, rid):
+    """Звук оригинала для карточки цензуры: лежит в папке загрузок пульта."""
+    con = data.jcon()
+    r = con.execute("SELECT payload FROM reviews WHERE id=? AND kind='censored'", (rid,)).fetchone()
+    f = (data.loads(r["payload"], {}) or {}).get("file") if r else None
+    if not f or not data.inside(f, env.UPLOADS_DIR) or not os.path.isfile(f):
+        raise Http404
+    return _stream(request, f)
 
 
 def audio_quarantine(request, qid):

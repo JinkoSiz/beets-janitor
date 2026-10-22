@@ -29,6 +29,11 @@ downtify берёт звук только с YouTube Music и иногда пр�
 Ограничение метода: инструментал и вокальная версия одной песни дают 86–96%,
 звук у них общий. Такую подмену отпечаток не различает.
 
+Превью русских релизов бывает заглушено (см. uncensor.py), и файл без
+цензуры совпадает с ним на 84–88% — «серая зона». Если uncensor.py заменил
+звук оригиналом или нашёл, что оригинал и лежит, такой результат — вердикт
+uncensored, без вопроса в пульт.
+
 Файлы не трогает. Каждая дорожка сверяется один раз; повторно — только если
 файл заменили (изменился размер).
 
@@ -262,10 +267,18 @@ def record(con, it, path, size, ref, sim, verdict):
                                                      "link", "url", "isrc") if ref.get(k) is not None}}
         jdb.ask(con, "substitution", review_key(it.id, size),
                 "%s — %s" % (it.artist, it.title), payload)
-    elif verdict == "ok":
+    elif verdict in ("ok", "uncensored"):
         # файл заменили, и теперь он верный — старый вопрос снимаем
         con.execute("UPDATE reviews SET status='resolved', decision='verified', decided_at=? "
                     "WHERE key LIKE ? AND status='open'", (jdb.now(), "verify:%d:%%" % it.id))
+
+
+def uncensored(con, item_id, size):
+    """Звук без цензуры: заменён оригиналом или оригинал и был (uncensor.py)."""
+    if con is None:
+        return False
+    r = con.execute("SELECT size, verdict FROM censor WHERE item_id=?", (item_id,)).fetchone()
+    return r is not None and r["verdict"] in ("replaced", "original") and r["size"] == size
 
 
 def due(row, size):
@@ -333,6 +346,8 @@ def check(con, it, ok_t, bad_t, verbose=False):
     ff = fingerprint(path) if pf else []
     sim = best_match(pf, ff) if pf and ff else None
     verdict = verdict_of(sim, ok_t, bad_t)
+    if verdict == "unsure" and uncensored(con, it.id, size):
+        verdict = "uncensored"
     record(con, it, path, size, ref, sim, verdict)
     if verbose or verdict in ("substitution", "unsure"):
         mark = {"substitution": "!! ПОДМЕНА", "unsure": "?  проверить"}.get(verdict, "   " + verdict)

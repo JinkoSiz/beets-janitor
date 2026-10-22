@@ -59,6 +59,7 @@ albumgroup.py    reassemble broken-up albums by embedded cover art
 dedup.py         drop duplicates confirmed by acoustic fingerprint
 consolidate.py   one album, one copy
 verify.py        does the audio match the release? (a few hundred tracks a night)
+uncensor.py      lines muted on streaming services, restored from release-time uploads
 follow.py        new releases from the artists you follow
 covers.py        artwork
 cleanup_residue  prune the quarantine
@@ -100,14 +101,14 @@ A small web app (Django + htmx) for the part that needs a human:
 | Page | What it is for |
 |---|---|
 | Summary | last night's chain step by step, what is waiting for you, Spotify budget, latest imports and their check results |
-| Decisions | suspected wrong recordings, uncertain duplicate pairs, tracks filed as-is — with players for both versions and the similarity scale |
+| Decisions | suspected wrong recordings, uncertain duplicate pairs, tracks filed as-is, muted lines that weren't replaced automatically — with players for both versions |
 | New releases | what the artists you follow put out; download or skip. A download that never reached the library says why (not on Spotify, didn't arrive) and can be retried for just the missing tracks |
 | Artists | who is followed (collected from the library automatically, plus your own), and picking the right one when the name is ambiguous |
 | Discography | type an artist, pick the right one, download everything you don't have yet |
 | Covers | drop an image onto an album nobody has artwork for |
 | Quarantine | listen to what was removed and bring it back |
-| Journal | every change with before/after, and a rollback button |
-| Settings | thresholds, schedule, retention |
+| Journal | every change with before/after, and a rollback button — a replaced audio file is swapped back from quarantine |
+| Settings | thresholds, schedule, retention, the censorship check and whether confirmed cases are replaced without asking |
 
 **It never touches your files.** Every decision is written to the shared
 database as an action, and the watcher container — the only thing that writes
@@ -165,6 +166,49 @@ would make a correct file look wrong.
 
 The same limit as above applies: an instrumental delivered instead of the
 vocal version is not caught.
+
+## How muted lines are put back
+
+Russian labels re-upload their releases to streaming services with drug
+references muted — a word or a line silenced, profanity left untouched. The
+master is shared by Spotify, Deezer and YouTube Music, so a downloader brings
+in the muted audio, the "explicit" flag means nothing, and `verify.py` sees no
+problem: the preview is muted in the same places. On two albums by one artist
+this turned out to be 11 tracks out of 41.
+
+The original usually survives on YouTube in uploads made at release time: the
+label's own channel and premiere channels. `uncensor.py` uses them as
+references:
+
+1. It searches YouTube for "artist title", drops sped-up, slowed, instrumental,
+   reaction and breakdown uploads, and drops auto-generated art tracks — those
+   carry the streaming master again.
+2. It downloads two or three of them in low quality (a 49 kbps m4a is plenty
+   for comparison and about 0.8 MB).
+3. It aligns each upload with the file by fingerprint and walks them in 0.1 s
+   steps: where the file is at least twice as quiet as the upload for 0.3 s
+   or more, a line was muted; where the fingerprint differs without a drop in
+   level, it was replaced (a bleep or a reversal). The first seconds, and the
+   last ten of uploads with an intro, are not compared — channels add their
+   own tags there.
+
+A spot shown by two uploads is confirmed. If one of them has the same length
+and no offset, its audio (opus, ~140 kbps, not re-encoded) replaces the file
+through the usual `replace` action: the old file goes to quarantine, tags and
+artwork stay, and the replacement can be rolled back from the journal. A spot
+shown by a single upload, a lossless file, or a confirmed spot without a
+same-length source becomes a question in the panel with both versions and the
+synced lyric line (from lrclib) that was muted. When the file turns out to be
+louder than the uploads, the library already has the original; `verify.py`
+then stops asking about its partial match with the muted preview.
+
+Only Russian artists are checked — those with a noticeable share of Cyrillic
+titles, so a couple of features do not pull in an entire foreign discography.
+A few hundred tracks a night, newest first: YouTube starts asking to "confirm
+you're not a bot" after a few hundred requests in a row, the run stops at the
+first such answer, and the downloader shares the same exit. `yt-dlp` lives in
+its own directory under `CONFIG_DIR`, is refreshed weekly and runs in a
+separate process without `sitecustomize.py`.
 
 ## Install
 
@@ -270,6 +314,7 @@ that would leave a crippled release behind.
 | `consolidate.py` | one album, one copy: pressings, discs, compilation fragments |
 | `covers.py` | artwork for singletons and for albums `fetchart` gave up on |
 | `verify.py` | checks the audio against a Spotify/Deezer preview of the matched release |
+| `uncensor.py` | finds lines muted on streaming services and restores them from release-time YouTube uploads |
 | `leftovers.py` | sorts out what beets left in `incoming`: same audio → quarantine, another version → imported alongside |
 | `follow.py` | new releases from followed artists |
 | `discography.py` | an artist's discography against your library (also used by the panel) |

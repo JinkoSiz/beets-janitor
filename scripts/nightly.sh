@@ -283,6 +283,13 @@ nightly_body() {
     echo "=== $(date '+%F %T') проверка по превью Spotify"
     step verify 3600 python3 "$SCRIPTS"/verify.py
   fi
+  # заглушённые на стримингах строчки — из оригинальных загрузок на YouTube.
+  # До новинок: и тому, и другому нужен YouTube, а закачки downtify, которые
+  # запустит follow, не должны делить с этой проверкой лимит запросов
+  if [ -f "$SCRIPTS"/uncensor.py ]; then
+    echo "=== $(date '+%F %T') цензура стримингов"
+    step uncensor 11400 python3 "$SCRIPTS"/uncensor.py
+  fi
   if [ -f "$SCRIPTS"/follow.py ]; then
     echo "=== $(date '+%F %T') новинки исполнителей"
     step follow 3600 python3 "$SCRIPTS"/follow.py

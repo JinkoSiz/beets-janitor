@@ -49,5 +49,6 @@ urlpatterns = [
     path("audio/item/<int:iid>", views.audio_item, name="audio_item"),
     path("audio/q/<int:qid>", views.audio_quarantine, name="audio_q"),
     path("audio/ref/<int:rid>", views.audio_ref, name="audio_ref"),
+    path("audio/upload/<int:rid>", views.audio_upload, name="audio_upload"),
     path("audio/deezer/<int:track_id>", views.audio_deezer, name="audio_deezer"),
 ]

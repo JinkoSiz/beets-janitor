@@ -181,3 +181,13 @@ def secs_mmss(v):
     except (TypeError, ValueError):
         return "—"
     return "%d:%02d" % (v // 60, v % 60)
+
+
+@register.filter
+def secs_tenths(v):
+    """54.8 -> 0:54.8: заглушка бывает короче секунды."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    return "%d:%04.1f" % (v // 60, v % 60)

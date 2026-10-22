@@ -121,6 +121,10 @@ STEP_TEXT = {
         s.get("dupes", 0), s.get("merged", 0), s.get("discs", 0) + s.get("discs_multi", 0), s.get("unsure", 0) + s.get("alien", 0)),
     "verify": lambda s: "сверено <b>%d</b>, подмен <b>%d</b>, спорных %d" % (
         sum(v for k, v in s.items() if k not in ("new", "backlog")), s.get("substitution", 0), s.get("unsure", 0)),
+    "uncensor": lambda s: "проверено <b>%d</b>, цензура: заменено <b>%d</b>, спрошено %d%s%s" % (
+        s.get("checked", 0), s.get("replacing", 0), s.get("censored", 0) + s.get("suspect", 0),
+        ", без оригинала %d" % s["no_ref"] if s.get("no_ref") else "",
+        ", <b>YouTube остановил</b>" if s.get("blocked") else ""),
     "follow": lambda s: "исполнителей %d, новинок <b>%d</b>, в очередь %d%s%s" % (
         s.get("artists", 0), s.get("new", 0), s.get("queued", 0),
         ", повтор %d" % s["retried"] if s.get("retried") else "",
@@ -314,7 +318,11 @@ def review_cards(con, kind, limit=60):
         c["verify"] = c["row"]["key"].startswith("verify:")
         files = c["p"].get("files") or []
         c["files"] = [dict(f, exists=f.get("item_id") in live) for f in files]
-        c["exists"] = (c["p"].get("item_id") in live) if c["verify"] or kind == "asis" else all(f["exists"] for f in c["files"])
+        c["exists"] = (c["p"].get("item_id") in live) if c["verify"] or kind in ("asis", "censored") \
+            else all(f["exists"] for f in c["files"])
+        if kind == "censored":
+            f = c["p"].get("file")
+            c["has_file"] = bool(f) and inside(f, env.UPLOADS_DIR) and os.path.isfile(f)
     return cards
 
 
@@ -325,7 +333,8 @@ def review_counts(con):
 
 # ---------------------------------------------------------------- карантин
 REASON_TEXT = {"duplicate": "копия", "substitution": "подмена", "broken": "битый",
-               "import_failed": "не импортировался", "skipped": "пропущен"}
+               "import_failed": "не импортировался", "skipped": "пропущен",
+               "censored": "цензура, заменён оригиналом", "replaced": "звук отменённой замены"}
 
 
 def quarantine(con, reason=None, offset=0, limit=150):
@@ -392,10 +401,33 @@ TECH_KEYS = {"mb_trackid", "mb_albumid", "mb_artistid", "mb_albumartistid", "dat
 KEY_ORDER = {"artist": 0, "title": 1, "album": 2, "albumartist": 3, "path": 4}
 
 
+def _mmss(t):
+    try:
+        return "%d:%04.1f" % (float(t) // 60, float(t) % 60)
+    except (TypeError, ValueError):
+        return "?"
+
+
+def readable(d):
+    """Поля замены от цензуры — словами: где вырезано и откуда оригинал."""
+    d = dict(d)
+    d.pop("quarantined", None)
+    spots = d.pop("spots", None)
+    if isinstance(spots, list) and spots:
+        d["вырезано"] = "; ".join("%s–%s%s" % (_mmss(s.get("t0")), _mmss(s.get("t1")),
+                                              " «%s»" % s["line"] if s.get("line") else "")
+                                 for s in spots if isinstance(s, dict))
+    src = d.pop("source", None)
+    if isinstance(src, dict):
+        d["оригинал"] = src.get("channel") or src.get("note") or src.get("id")
+    return d
+
+
 def diff(before, after):
     """Изменённые поля: [(поле, было, стало)], сначала содержательные."""
     if not isinstance(before, dict) or not isinstance(after, dict):
         return []
+    before, after = readable(before), readable(after)
     out = []
     for k in set(before) | set(after):
         if k in SKIP_KEYS:
@@ -416,6 +448,9 @@ def can_rollback(ev, before):
         return False
     if ev["op"] in ("quarantine", "move", "rename"):
         return True
+    if ev["op"] == "replace":
+        # прежний звук лежит в карантине: откат вернёт его на место
+        return bool(ev["item_id"]) and isinstance(before, dict) and bool(before.get("path"))
     return isinstance(before, dict) and bool(ev["item_id"]) and any(
         k in before for k in ("album", "albumartist", "artist", "title", "year", "disc", "track", "comp", "mb_trackid",
                               "original_year"))

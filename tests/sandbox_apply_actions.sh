@@ -102,12 +102,48 @@ import mediafile
 print("   картинок во втором файле: %d | cover.jpg в папке: %s"
       % (len(mediafile.MediaFile(back[0].path.decode()).images), os.path.exists(os.path.join(os.path.dirname(back[0].path.decode()), "cover.jpg"))))
 
-# 5. попытки выйти за пределы
+# 5. замена звука от цензуры и её откат
+import shutil
+it = lib.get_item(first.id)
+was_path, was_size = it.path.decode(), os.path.getsize(it.path.decode())
+up = os.path.join(os.environ["CONFIG_DIR"], "janitor", "uploads", "uncensor-test.mp3")
+shutil.copy(back[0].path.decode(), up)
+spots = [{"t0": 54.8, "t1": 56.3, "kind": "заглушено", "sure": True, "line": "строчка"}]
+jdb.enqueue(con, "replace", {"item_id": it.id, "file": up, "by": "uncensor",
+                             "censor": {"spots": spots, "source": {"id": "x", "channel": "Лейбл"}}})
+run("замена от цензуры")
+lib = retry.open_library()
+it = lib.get_item(first.id)
+ev = con.execute("SELECT * FROM events WHERE op='replace' ORDER BY id DESC LIMIT 1").fetchone()
+cz = con.execute("SELECT verdict, size FROM censor WHERE item_id=?", (it.id,)).fetchone()
+q = con.execute("SELECT reason FROM quarantine WHERE original_path=? AND status='held'", (was_path,)).fetchone()
+print("   журнал: %s | в карантине: %s | цензура: %s, размер сходится: %s"
+      % (ev["script"], q and q["reason"], cz and cz["verdict"], bool(cz) and cz["size"] == os.path.getsize(it.path.decode())))
+
+qrow = con.execute("SELECT id FROM quarantine WHERE original_path=? AND status='held'", (was_path,)).fetchone()
+jdb.enqueue(con, "restore", {"quarantine_id": qrow["id"]})
+run("«Вернуть» прежний звук в обход отката")
+print("   ", last_action())
+
+jdb.enqueue(con, "rollback", {"event_id": ev["id"]})
+run("откат замены")
+lib = retry.open_library()
+it = lib.get_item(first.id)
+cz = con.execute("SELECT verdict FROM censor WHERE item_id=?", (it.id,)).fetchone()
+print("   прежний файл на месте: %s | размер прежний: %s | дорожек в базе: %d | цензура: %s"
+      % (it.path.decode() == was_path, os.path.getsize(was_path) == was_size, len(list(lib.items())),
+         cz and cz["verdict"]))
+jdb.enqueue(con, "rollback", {"event_id": ev["id"]})
+run("повторный откат замены")
+print("   ", last_action())
+
+# 6. попытки выйти за пределы
 jdb.enqueue(con, "quarantine", {"path": "/etc/passwd"})
 jdb.enqueue(con, "set_cover", {"item_ids": [first.id], "image": "/etc/hostname"})
 jdb.enqueue(con, "quarantine", {"path": os.environ["MUSIC_DIR"] + "/../config/janitor.db"})
 jdb.enqueue(con, "frobnicate", {})
+jdb.enqueue(con, "replace", {"item_id": first.id, "file": "/etc/hostname"})
 run("попытки выйти за пределы")
-for r in con.execute("SELECT kind, status, result FROM actions ORDER BY id DESC LIMIT 4"):
+for r in con.execute("SELECT kind, status, result FROM actions ORDER BY id DESC LIMIT 5"):
     print("   %-10s %-7s %s" % (r["kind"], r["status"], r["result"]))
 PYEOF

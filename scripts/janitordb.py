@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import env  # noqa: E402
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -83,7 +83,7 @@ CREATE INDEX IF NOT EXISTS events_item ON events(item_id);
 -- и не задаёт тот же вопрос второй раз, а применяет ответ.
 CREATE TABLE IF NOT EXISTS reviews (
     id          INTEGER PRIMARY KEY,
-    kind        TEXT NOT NULL,             -- substitution | duplicate | asis | cover | release
+    kind        TEXT NOT NULL,             -- substitution | duplicate | asis | cover | release | censored
     key         TEXT NOT NULL UNIQUE,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS quarantine (
     id            INTEGER PRIMARY KEY,
     path          TEXT NOT NULL UNIQUE,    -- где лежит сейчас
     original_path TEXT NOT NULL,           -- откуда убран
-    reason        TEXT NOT NULL,           -- duplicate | substitution | broken
+    reason        TEXT NOT NULL,           -- duplicate | substitution | broken | censored | replaced
     similarity    REAL,
     kept_path     TEXT,                    -- какая копия осталась вместо
     album_id      INTEGER,                 -- из какого альбома beets убран: туда и вернётся;
@@ -215,10 +215,25 @@ CREATE TABLE IF NOT EXISTS checks (
     provider    TEXT,                      -- spotify | deezer
     ref_id      TEXT,                      -- трек у источника, с чьим превью сверяли
     similarity  REAL,
-    verdict     TEXT NOT NULL,             -- ok | unsure | substitution | no_preview | no_ref | failed
+    verdict     TEXT NOT NULL,             -- ok | uncensored | unsure | substitution | no_preview | no_ref | failed
     checked_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS checks_verdict ON checks(verdict);
+
+-- цензура стримингов (uncensor.py): не заглушены ли в файле строчки, которые
+-- есть в оригинальных загрузках на YouTube
+CREATE TABLE IF NOT EXISTS censor (
+    item_id     INTEGER PRIMARY KEY,       -- дорожка в базе beets
+    path        TEXT,
+    size        INTEGER,                   -- по размеру видно, что файл заменили
+    verdict     TEXT NOT NULL,             -- clean | original | censored | suspect | replacing | replaced
+                                           -- | kept | no_ref | failed
+    spots       TEXT,                      -- json: где файл отличается от оригинала
+    refs        TEXT,                      -- json: с какими загрузками сравнивали
+    source      TEXT,                      -- json: чьим звуком заменено или предложено заменить
+    checked_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS censor_verdict ON censor(verdict);
 """
 
 
@@ -393,6 +408,18 @@ def quarantine_add(con, path, original_path, reason, similarity=None, kept_path=
         (path, original_path, reason, similarity, kept_path, album_id, now(), size, title, artist))
 
 
+# ---------------------------------------------------------------- цензура
+def censor_set(con, item_id, path, size, verdict, spots=None, refs=None, source=None):
+    """Вердикт uncensor.py по дорожке. Не переданные spots/refs/source остаются
+    прежними: замена и откат меняют только вердикт и файл."""
+    con.execute(
+        "INSERT INTO censor(item_id, path, size, verdict, spots, refs, source, checked_at) VALUES (?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(item_id) DO UPDATE SET path=excluded.path, size=excluded.size, verdict=excluded.verdict, "
+        "spots=COALESCE(excluded.spots, censor.spots), refs=COALESCE(excluded.refs, censor.refs), "
+        "source=COALESCE(excluded.source, censor.source), checked_at=excluded.checked_at",
+        (item_id, path, size, verdict, _j(spots), _j(refs), _j(source), now()))
+
+
 # ---------------------------------------------------------------- настройки
 DEFAULTS = {
     "fp_same": "0.65",
@@ -407,6 +434,9 @@ DEFAULTS = {
     "auto_download": "0",
     "follow_new_days": "60",
     "verify_limit": "300",
+    "censor_enabled": "1",
+    "censor_auto": "1",
+    "censor_limit": "300",
     "nightly_hour": "5",
     "interval": "300",
 }

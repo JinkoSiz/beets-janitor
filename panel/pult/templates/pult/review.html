@@ -12,6 +12,7 @@
     <a class="tab" role="tab" href="?tab=subs" aria-selected="{% if tab == 'subs' %}true{% else %}false{% endif %}" style="text-decoration:none">Подмены {% if counts.substitution %}<span class="badge hot">{{ counts.substitution }}</span>{% endif %}</a>
     <a class="tab" role="tab" href="?tab=dups" aria-selected="{% if tab == 'dups' %}true{% else %}false{% endif %}" style="text-decoration:none">Спорные дубли {% if counts.duplicate %}<span class="badge hot">{{ counts.duplicate }}</span>{% endif %}</a>
     <a class="tab" role="tab" href="?tab=asis" aria-selected="{% if tab == 'asis' %}true{% else %}false{% endif %}" style="text-decoration:none">Как есть {% if counts.asis %}<span class="badge">{{ counts.asis }}</span>{% endif %}</a>
+    <a class="tab" role="tab" href="?tab=cens" aria-selected="{% if tab == 'cens' %}true{% else %}false{% endif %}" style="text-decoration:none">Цензура {% if counts.censored %}<span class="badge hot">{{ counts.censored }}</span>{% endif %}</a>
   </div>
 
   {% if tab == "asis" %}
@@ -27,6 +28,12 @@
     {% else %}
     <div class="empty"><b>Очередь «как есть» пуста</b>Всё, что retry не смог опознать сам, появится здесь с лучшим найденным кандидатом.</div>
     {% endif %}
+  {% elif tab == "cens" %}
+    <div class="cards">
+      {% for c in cards %}{% include "pult/_censor_card.html" %}{% empty %}
+      <div class="empty"><b>Вопросов о цензуре нет</b>Ночью русские треки сверяются с оригинальными загрузками на YouTube. Подтверждённое двумя источниками заменяется само, а спорное появится здесь.</div>
+      {% endfor %}
+    </div>
   {% else %}
     <div class="cards">
       {% for c in cards %}{% include "pult/_card.html" %}{% empty %}

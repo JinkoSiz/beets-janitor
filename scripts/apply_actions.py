@@ -20,14 +20,15 @@
               альбому, положить рядом cover.jpg
   rollback    {"event_id"}
               откатить запись журнала: теги — к прежним значениям, файл —
-              на прежнее место
+              на прежнее место, заменённый звук — прежним файлом из карантина
   download    {"release_id"}
               отправить в downtify то, что в релизе решено скачать
   accept      {"item_id", "track_id"}
               принять кандидата, которого retry отклонил: теги по нему
-  replace     {"item_id", "file"}
+  replace     {"item_id", "file", "by", "censor"}
               заменить звук дорожки загруженным файлом: старый — в
-              карантин, теги и обложка — из базы beets в новый файл
+              карантин, теги и обложка — из базы beets в новый файл;
+              censor — замена оригиналом без цензуры (uncensor.py)
   run         {"what": "nightly"}
               запустить ночную работу на следующем цикле
 
@@ -123,6 +124,14 @@ def do_restore(con, lib, p):
     if not os.path.isfile(src):
         con.execute("UPDATE quarantine SET status='purged' WHERE id=?", (row["id"],))
         raise Refused("файла в карантине уже нет — удалён по сроку")
+    # прежний звук заменённой дорожки: дорожка в базе осталась, и возврат
+    # завёл бы её второй копией. Возвращать его надо откатом замены
+    swap = con.execute("SELECT id FROM events WHERE op='replace' AND reverted_by IS NULL "
+                       "AND json_extract(before, '$.path')=? ORDER BY id DESC LIMIT 1", (orig,)).fetchone()
+    if swap is not None:
+        raise Refused("это прежний звук заменённой дорожки — верните его откатом записи %d в журнале" % swap["id"])
+    if row["reason"] == "replaced":
+        raise Refused("это звук отменённой замены — отдельной дорожкой его не вернуть")
     dst = free_path(orig)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.move(src, dst)
@@ -234,6 +243,8 @@ def do_rollback(con, lib, p):
         if row is None:
             raise Refused("файла нет в карантине")
         msg = do_restore(con, lib, {"quarantine_id": row["id"]})
+    elif ev["op"] == "replace" and ev["item_id"] and isinstance(before, dict) and before.get("path"):
+        msg = undo_replace(con, lib, ev, before, after if isinstance(after, dict) else {})
     elif isinstance(before, dict) and before.get("path") and after.get("path") and ev["op"] in ("move", "rename"):
         cur_path, old_path = after["path"], before["path"]
         if not inside(cur_path, env.MUSIC_DIR) or not inside(old_path, env.MUSIC_DIR):
@@ -291,13 +302,39 @@ def do_accept(con, lib, p):
 AUDIO_MAGIC = (b"ID3", b"fLaC", b"OggS", b"RIFF")
 
 
+def store_file_info(item, path):
+    """Дорожка теперь в этом файле: путь и звуковые поля — из него, теги и
+    обложка — из базы beets."""
+    import mediafile
+    from beets import util
+    item.path = util.bytestring_path(path)
+    f = mediafile.MediaFile(path)
+    item.length, item.bitrate, item.format = f.length, f.bitrate, f.format
+    item.samplerate, item.bitdepth, item.channels = f.samplerate, f.bitdepth or 0, f.channels
+    item.store()
+    item.try_write()
+
+
+def same_owner(path, like):
+    # сторож работает от root: без этого новый файл остался бы чужим для
+    # плеера и для скриптов, которые ходят в фонотеку от имени пользователя
+    try:
+        st = os.stat(like)
+        os.chown(path, st.st_uid, st.st_gid)
+    except OSError:
+        pass
+
+
 def do_replace(con, lib, p):
     """Заменить звук дорожки загруженным файлом.
 
-    Так чинится подмена, когда правильный файл нашёлся руками: старый уходит
-    в карантин (reason substitution), новый встаёт на его место, а теги и
-    обложка переносятся из базы beets — их подмена не портила, испорчен
-    был только звук.
+    Так чинится подмена, когда правильный файл нашёлся руками, и цензура,
+    когда оригинал нашёл uncensor.py: старый файл уходит в карантин, новый
+    встаёт на его место, а теги и обложка переносятся из базы beets — их
+    подмена не портила, испорчен был только звук. Откат — из журнала.
+
+    p["censor"] — замена от цензуры: где были заглушки и откуда оригинал.
+    p["by"] — кто заменил, для журнала: пульт или uncensor.
     """
     import mediafile
     item = lib.get_item(int(p["item_id"]))
@@ -312,6 +349,7 @@ def do_replace(con, lib, p):
     old = item.path.decode("utf-8", "replace")
     if not inside(old, env.MUSIC_DIR):
         raise Refused("путь вне фонотеки: %s" % old)
+    censor = p.get("censor")
     images = []
     try:
         images = mediafile.MediaFile(old).images if os.path.isfile(old) else []
@@ -319,30 +357,76 @@ def do_replace(con, lib, p):
         pass
     ext = os.path.splitext(new)[1].lower() or os.path.splitext(old)[1]
     target = os.path.splitext(old)[0] + ext
+    q = None
     if os.path.isfile(old):
         q = free_path(os.path.join(env.DUPES_DIR, os.path.relpath(old, env.MUSIC_DIR)))
         os.makedirs(os.path.dirname(q), exist_ok=True)
         shutil.move(old, q)
         os.utime(q, None)
-        jdb.quarantine_add(con, q, old, "substitution", title=str(item.title), artist=str(item.artist),
-                           album_id=item.album_id or 0)
+        jdb.quarantine_add(con, q, old, "censored" if censor else "substitution", title=str(item.title),
+                           artist=str(item.artist), album_id=item.album_id or 0)
     if os.path.exists(target):
         target = free_path(target)
     shutil.move(new, target)
-    from beets import util
-    item.path = util.bytestring_path(target)
-    f = mediafile.MediaFile(target)
-    item.length, item.bitrate, item.format = f.length, f.bitrate, f.format
-    item.samplerate, item.bitdepth, item.channels = f.samplerate, f.bitdepth or 0, f.channels
-    item.store()
-    item.try_write()
+    if q:
+        same_owner(target, q)
+    store_file_info(item, target)
     if images:
         f = mediafile.MediaFile(target)
         f.images = images
         f.save()
-    jdb.log_event(con, "panel", "replace", {"path": old}, {"path": target, "size": os.path.getsize(target)},
+    size = os.path.getsize(target)
+    after = {"path": target, "size": size}
+    if q:
+        # по этому пути откат найдёт прежний файл
+        after["quarantined"] = q
+    if censor:
+        after["why"] = "цензура"
+        after.update({k: censor[k] for k in ("spots", "source") if censor.get(k)})
+        jdb.censor_set(con, item.id, target, size, "replaced", spots=censor.get("spots"), source=censor.get("source"))
+        # вопросы о цензуре в прежнем файле больше не к чему задавать
+        con.execute("UPDATE reviews SET status='resolved', decision='replace', decided_at=? WHERE kind='censored' "
+                    "AND status='open' AND json_extract(payload, '$.item_id')=?", (jdb.now(), item.id))
+    jdb.log_event(con, "uncensor" if p.get("by") == "uncensor" else "panel", "replace", {"path": old}, after,
                   item_id=item.id, path=target)
     return "звук заменён: %s" % os.path.relpath(target, env.MUSIC_DIR)
+
+
+def undo_replace(con, lib, ev, before, after):
+    """Откат замены звука: прежний файл — из карантина на место, заменивший
+    его — в карантин. Теги остаются те, что в базе beets."""
+    item = lib.get_item(ev["item_id"])
+    if item is None:
+        raise Refused("дорожки больше нет в базе")
+    cur = item.path.decode("utf-8", "replace")
+    if after.get("path") and os.path.realpath(cur) != os.path.realpath(after["path"]):
+        raise Refused("файл дорожки с тех пор снова меняли — сначала откатите более позднюю запись")
+    if after.get("quarantined"):
+        row = con.execute("SELECT * FROM quarantine WHERE path=?", (after["quarantined"],)).fetchone()
+    else:
+        # замены, сделанные до того, как путь в карантине стал писаться в журнал
+        row = con.execute("SELECT * FROM quarantine WHERE original_path=? AND status='held' "
+                          "ORDER BY moved_at DESC LIMIT 1", (before["path"],)).fetchone()
+    if row is None or row["status"] != "held" or not os.path.isfile(row["path"]):
+        raise Refused("прежнего файла в карантине уже нет — удалён по сроку")
+    if not inside(row["path"], env.DUPES_DIR) or not inside(before["path"], env.MUSIC_DIR) \
+            or not inside(cur, env.MUSIC_DIR):
+        raise Refused("путь вне фонотеки или карантина")
+    q = free_path(os.path.join(env.DUPES_DIR, os.path.relpath(cur, env.MUSIC_DIR)))
+    os.makedirs(os.path.dirname(q), exist_ok=True)
+    shutil.move(cur, q)
+    os.utime(q, None)
+    jdb.quarantine_add(con, q, cur, "replaced", title=str(item.title), artist=str(item.artist),
+                       album_id=item.album_id or 0)
+    dst = free_path(before["path"])
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.move(row["path"], dst)
+    con.execute("UPDATE quarantine SET status='restored' WHERE id=?", (row["id"],))
+    store_file_info(item, dst)
+    # прежний звук возвращён руками — uncensor.py не должен заменить его снова
+    if con.execute("SELECT 1 FROM censor WHERE item_id=?", (item.id,)).fetchone():
+        jdb.censor_set(con, item.id, dst, os.path.getsize(dst), "kept")
+    return "прежний звук возвращён: %s" % os.path.relpath(dst, env.MUSIC_DIR)
 
 
 def do_download(con, lib, p):
