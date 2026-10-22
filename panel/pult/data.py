@@ -201,8 +201,10 @@ def spotify_state():
         pace = float(read_first(env.SPOTIFY_PACE_FILE, "0.5"))
     except ValueError:
         pace = 0.5
+    # «до когда, отказов подряд, почему» — причина есть, если отключились сразу
+    breaker = read_first(env.SPOTIFY_BREAKER_FILE, "0").split() or ["0"]
     try:
-        until = float((read_first(env.SPOTIFY_BREAKER_FILE, "0").split() or ["0"])[0])
+        until = float(breaker[0])
     except ValueError:
         until = 0.0
     r429 = 0
@@ -219,7 +221,7 @@ def spotify_state():
     return {"used": used, "daily": daily, "pct": round(100.0 * used / daily, 1) if daily else 0,
             "pace": pace, "breaker": until > time.time(),
             "breaker_until": datetime.datetime.fromtimestamp(until) if until > time.time() else None,
-            "r429": r429}
+            "breaker_why": " ".join(breaker[2:]), "r429": r429}
 
 
 def recent_imports(con, limit=6):

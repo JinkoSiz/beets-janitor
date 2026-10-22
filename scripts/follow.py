@@ -21,13 +21,16 @@ auto_download. Остальное запоминается как известн
 высыпалась бы вся дискография. Недостающее из старого — это «Дискография».
 
 Скачивание, которому помешал YouTube или downtify, ночью повторяется само —
-не больше RETRY_MAX попыток на релиз.
+не больше RETRY_MAX попыток на релиз. Если не ответил сам Spotify (нет
+Premium у владельца приложения, предохранитель), повтор ждёт, пока Spotify
+снова заработает, и такие попытки в RETRY_MAX не считаются: до поиска дело
+не дошло.
 
   follow.py [--dry] [--artist ИМЯ]
   follow.py --arrivals     только отметить скачанные релизы, доехавшие до фонотеки
   follow.py --watch        то же между разборами incoming, пока что-то качается:
                            упавшее в downtify сразу становится «не скачалось»
-  follow.py --retry        повторить сейчас то, чему помешал YouTube или downtify
+  follow.py --retry        повторить сейчас то, чему помешал YouTube, downtify или Spotify
   follow.py --catch-up     разово: свежие релизы, которые прежняя версия при
                            первой проверке записала известными, — в новинки
 """
@@ -41,6 +44,7 @@ from collections import Counter, defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import discography as disco  # noqa: E402
+import download  # noqa: E402
 import env  # noqa: E402
 import janitordb as jdb  # noqa: E402
 
@@ -294,23 +298,32 @@ def fetch_error(message):
 
 
 def attempts(con, release_id):
+    # попытка, на которой Spotify не ответил, до поиска не дошла — не в счёт
     return con.execute("SELECT count(*) FROM actions WHERE kind='download' "
-                       "AND json_extract(payload, '$.release_id')=?", (release_id,)).fetchone()[0]
+                       "AND json_extract(payload, '$.release_id')=? "
+                       "AND NOT (status='failed' AND result LIKE ?)",
+                       (release_id, "ошибка: %s%%" % download.SPOTIFY_DOWN)).fetchone()[0]
 
 
 def retry_failed(con):
-    """Повторить скачивание, которому помешал YouTube или downtify.
+    """Повторить скачивание, которому помешал YouTube, downtify или Spotify.
 
     Такие сбои проходят сами: YouTube после пачки закачек просит
-    «подтвердить, что не бот», а через несколько часов отпускает. Не больше
-    RETRY_MAX попыток на релиз. То, чего нет в Spotify, и то, что скачалось,
-    но не доехало до фонотеки, повтором не лечится. Вернуть число релизов.
+    «подтвердить, что не бот», а через несколько часов отпускает; Spotify
+    отвечает снова, когда у владельца приложения опять есть Premium. Пока
+    предохранитель Spotify открыт, такие релизы ждут. Не больше RETRY_MAX
+    попыток на релиз. То, чего нет в Spotify, и то, что скачалось, но не
+    доехало до фонотеки, повтором не лечится. Вернуть число релизов.
     """
     n = 0
+    paused = download.spotify_paused()
     for rel in con.execute("SELECT id, title FROM releases WHERE status='failed' ORDER BY id").fetchall():
         kinds = {(jdb.loads(t["info"], {}) or {}).get("fetch_error")
                  for t in con.execute("SELECT info FROM release_tracks WHERE release_id=?", (rel["id"],))}
-        if not kinds & {"youtube", "downtify"} or attempts(con, rel["id"]) >= RETRY_MAX:
+        if not kinds & {"youtube", "downtify", "spotify"} or attempts(con, rel["id"]) >= RETRY_MAX:
+            continue
+        if "spotify" in kinds and paused:
+            print("   ~ Spotify на паузе (%s), подожду: %s" % (paused, rel["title"][:60]))
             continue
         n += 1
         print("   ~ повторю: %s" % rel["title"][:60])
@@ -426,11 +439,11 @@ def main():
     if "--catch-up" in sys.argv:
         catch_up(con, disco.Library(), float(jdb.setting(con, "ref_ok")))
         return
-    # сбои YouTube и downtify проходят сами — ночью повторяем, и при
+    # сбои YouTube, downtify и Spotify проходят сами — ночью повторяем, и при
     # выключенном слежении тоже: скачивание могло прийти из «Дискографии»
     retried = 0 if only else retry_failed(con)
     if retried:
-        print("повторю скачивание, которому мешал YouTube или downtify: %d" % retried)
+        print("повторю скачивание, которому мешал YouTube, downtify или Spotify: %d" % retried)
     if jdb.setting(con, "follow_enabled") != "1" and not only:
         print("слежение выключено в настройках")
         return

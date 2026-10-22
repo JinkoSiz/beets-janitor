@@ -61,6 +61,7 @@
         <dl class="kv">
           <dt>пауза между запросами</dt><dd>{{ s.spotify.pace }} с</dd>
           <dt>отказов 429 сегодня</dt><dd>{{ s.spotify.r429 }}</dd>
+          {% if s.spotify.breaker and s.spotify.breaker_why %}<dt>почему пауза</dt><dd>{{ s.spotify.breaker_why }}</dd>{% endif %}
         </dl>
       </div>
 

@@ -19,6 +19,7 @@ CACHE_DB = env.SPOTIFY_CACHE_DB
 BREAKER_FILE = env.SPOTIFY_BREAKER_FILE
 BREAKER_FAILS = 5
 BREAKER_MAX = 6 * 3600
+PREMIUM_PAUSE = 3600
 SPOTIFY_DAILY = env.SPOTIFY_DAILY
 SLOW = 15.0
 SLEEP_CAP = 45.0
@@ -95,6 +96,11 @@ def _cache_put(url, status, body):
 # Пока Spotify отдаёт 429, каждый запрос — потеря: ждём паузу, тратим бюджет,
 # получаем отказ. Spotify в заголовке Retry-After сам говорит, сколько ждать —
 # уважаем это и на время отключаемся, не трогая сеть вообще.
+#
+# Второй случай — 403 «Active premium subscription required for the owner of
+# the app»: приложение в Development mode Spotify пускает, только пока у его
+# владельца оплачен Premium. Это не на минуты, поэтому отключаемся сразу и на
+# час, а причина пишется в файл третьим полем — её показывает пульт.
 def _breaker_until():
     try:
         return float(open(BREAKER_FILE).read().split()[0])
@@ -109,10 +115,10 @@ def _breaker_fails():
         return 0
 
 
-def _breaker_set(until, fails):
+def _breaker_set(until, fails, why=""):
     try:
         with open(BREAKER_FILE, "w") as f:
-            f.write("%.0f %d" % (until, fails))
+            f.write(("%.0f %d %s" % (until, fails, why)).rstrip())
     except Exception:
         pass
 
@@ -130,6 +136,11 @@ def _breaker_hit(retry_after):
         _log("BREAKER", "spotify отключён", wait, "после %d отказов подряд" % fails)
         fails = 0
     _breaker_set(until, fails)
+
+
+def _breaker_trip(wait, why):
+    _log("BREAKER", "spotify отключён", wait, why)
+    _breaker_set(time.time() + wait, 0, why)
 
 
 def _breaker_ok():
@@ -250,6 +261,9 @@ try:
                 _slower()
                 _breaker_hit(r.headers.get("Retry-After"))
                 _log("429", url, d, "пауза -> %.2fs" % _pace[0])
+            elif r.status_code == 403 and b"premium" in (r.content or b"").lower():
+                _log("403", url, d, "у владельца приложения нет Premium")
+                _breaker_trip(PREMIUM_PAUSE, "нет Premium у владельца приложения")
             else:
                 _faster()
                 _breaker_ok()

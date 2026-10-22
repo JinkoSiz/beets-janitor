@@ -11,6 +11,10 @@ downtify качает только по ссылке на трек Spotify (ил
 Запросы к Spotify идут через sitecustomize.py: кэш, темп и суточный лимит
 общие с остальными скриптами.
 
+Отказ Spotify целиком (нет Premium у владельца приложения, предохранитель,
+сеть) — не «трека нет»: релиз становится «не скачалось» с этой причиной, а
+ночью follow.py повторяет его сам, не засчитывая такую попытку.
+
 Звук downtify берёт с YouTube Music, откуда и подмены. После импорта
 каждую скачанную дорожку сверит verify.py.
 
@@ -31,10 +35,29 @@ import env  # noqa: E402
 import janitordb as jdb  # noqa: E402
 
 LEN_OK = 5          # секунд расхождения длины между Deezer и Spotify
+SPOTIFY_DOWN = "Spotify API не отвечает"   # по этому началу follow.py узнаёт такой сбой
 
 
 # ---------------------------------------------------------------- Spotify
 _token = {"value": None, "until": 0}
+
+
+class SpotifyUnavailable(RuntimeError):
+    """Spotify не ответил по существу — найден трек или нет, неизвестно."""
+
+    def __init__(self, why):
+        super().__init__("%s: %s; повторю ночью" % (SPOTIFY_DOWN, why))
+
+
+def spotify_paused():
+    """Открыт предохранитель sitecustomize — почему; закрыт — пустая строка."""
+    try:
+        until, _fails, *why = open(env.SPOTIFY_BREAKER_FILE).read().split()
+        if time.time() < float(until):
+            return " ".join(why) or "пауза после отказов"
+    except Exception:
+        pass
+    return ""
 
 
 def credentials():
@@ -56,19 +79,30 @@ def token():
     cid, secret = credentials()
     if not cid:
         raise RuntimeError("нет ключей Spotify (SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET)")
-    r = requests.post("https://accounts.spotify.com/api/token", data={"grant_type": "client_credentials"},
-                      auth=(cid, secret), timeout=30)
-    r.raise_for_status()
+    try:
+        r = requests.post("https://accounts.spotify.com/api/token", data={"grant_type": "client_credentials"},
+                          auth=(cid, secret), timeout=30)
+        r.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        raise SpotifyUnavailable("токен не выдан (%s)" % str(e)[:80])
     j = r.json()
     _token["value"], _token["until"] = j["access_token"], time.time() + int(j.get("expires_in", 3600))
     return _token["value"]
 
 
 def spotify(path, **params):
-    r = requests.get("https://api.spotify.com/v1/" + path, params=params,
-                     headers={"Authorization": "Bearer " + token()}, timeout=30)
+    """Ответ Spotify. «Не нашлось» — это 200 с пустым списком; любой другой
+    ответ значит, что Spotify не ответил вовсе, и это SpotifyUnavailable."""
+    try:
+        r = requests.get("https://api.spotify.com/v1/" + path, params=params,
+                         headers={"Authorization": "Bearer " + token()}, timeout=30)
+    except requests.exceptions.RequestException as e:
+        # в том числе открытый предохранитель sitecustomize
+        raise SpotifyUnavailable(spotify_paused() or str(e)[:80])
+    if r.status_code == 403 and "premium" in r.text.lower():
+        raise SpotifyUnavailable("нет Premium у владельца приложения")
     if r.status_code != 200:
-        return None
+        raise SpotifyUnavailable("ответ %d" % r.status_code)
     return r.json()
 
 
@@ -137,6 +171,19 @@ def note_track(con, t, sid, searched=True):
     con.execute("UPDATE release_tracks SET info=? WHERE id=?", (json.dumps(info, ensure_ascii=False), t["id"]))
 
 
+def note_spotify_down(con, tracks):
+    """Spotify не ответил: у дорожек вид сбоя «spotify» — по нему follow.py
+    ночью повторит скачивание. Нашлась дорожка или нет, неизвестно, поэтому
+    прежний ответ «в Spotify её нет» снимается."""
+    for t in tracks:
+        row = con.execute("SELECT info FROM release_tracks WHERE id=?", (t["id"],)).fetchone()
+        info = jdb.loads(row["info"], {}) or {}
+        if "spotify_id" in info and not info["spotify_id"]:
+            info.pop("spotify_id")
+        info["fetch_error"] = "spotify"
+        con.execute("UPDATE release_tracks SET info=? WHERE id=?", (json.dumps(info, ensure_ascii=False), t["id"]))
+
+
 def album_track_ids(tracks, songs):
     """Какой дорожке релиза какая песня альбома Spotify: по названию и длине,
     а не сошлось — по номеру, если длина та же (альбом найден по UPC, порядок
@@ -153,6 +200,30 @@ def album_track_ids(tracks, songs):
             if s is not None and abs(float(s.get("duration") or 0) - (t["duration"] or 0)) <= LEN_OK:
                 out[t["id"]] = s.get("song_id")
     return out
+
+
+def find_songs(con, rel, rows, want, artist):
+    """Песни downtify для дорожек want и названия тех, что в Spotify не нашлись."""
+    songs, missing = [], []
+    # весь релиз — одним альбомом: так downtify сохранит номера дорожек
+    if len(want) == len(rows) and rel["provider"] == "deezer":
+        alb = disco.deezer("album/%s" % rel["provider_id"]) or {}
+        sid = album_by_upc(alb["upc"]) if alb.get("upc") else None
+        if sid:
+            songs = downtify_songs("https://open.spotify.com/album/" + sid)
+            ids = album_track_ids(want, songs)
+            for t in want:
+                note_track(con, t, ids.get(t["id"]), searched=False)
+    if not songs:
+        for t in want:
+            sid = (track_by_isrc(t["isrc"], t["duration"]) if t["isrc"] else None) or \
+                track_by_name(artist, t["title"], t["duration"])
+            note_track(con, t, sid)
+            if not sid:
+                missing.append(t["title"])
+                continue
+            songs.extend(downtify_songs("https://open.spotify.com/track/" + sid))
+    return songs, missing
 
 
 def release(con, release_id, artist_name=None, retry=False):
@@ -176,26 +247,11 @@ def release(con, release_id, artist_name=None, retry=False):
     if not want:
         return "в релизе нечего качать"
     artist = artist_name or rel["deezer_name"] or rel["artist"] or ""
-
-    songs, missing = [], []
-    # весь релиз — одним альбомом: так downtify сохранит номера дорожек
-    if len(want) == len(rows) and rel["provider"] == "deezer":
-        alb = disco.deezer("album/%s" % rel["provider_id"]) or {}
-        sid = album_by_upc(alb["upc"]) if alb.get("upc") else None
-        if sid:
-            songs = downtify_songs("https://open.spotify.com/album/" + sid)
-            ids = album_track_ids(want, songs)
-            for t in want:
-                note_track(con, t, ids.get(t["id"]), searched=False)
-    if not songs:
-        for t in want:
-            sid = (track_by_isrc(t["isrc"], t["duration"]) if t["isrc"] else None) or \
-                track_by_name(artist, t["title"], t["duration"])
-            note_track(con, t, sid)
-            if not sid:
-                missing.append(t["title"])
-                continue
-            songs.extend(downtify_songs("https://open.spotify.com/track/" + sid))
+    try:
+        songs, missing = find_songs(con, rel, rows, want, artist)
+    except SpotifyUnavailable:
+        note_spotify_down(con, want)
+        raise
     if not songs:
         raise RuntimeError("в Spotify не нашлось ни одной дорожки: %s" % ", ".join(missing[:5]))
 
