@@ -35,10 +35,11 @@ OG Buda так оказалось 11 треков из 41 (2026-10-22).
 
 Решение:
   - место нашлось у двух эталонов — цензура подтверждена. Если один из них
-    идёт без сдвига и той же длины, при censor_auto=1 его звук (opus около
-    140 кбит/с, без перекодирования) встаёт на место файла сразу — действием
-    replace: старый файл в карантин, теги и обложка остаются, откат — из
-    журнала. Иначе — вопрос в пульт;
+    идёт без сдвига и той же длины, при censor_auto=1 его звук встаёт на
+    место файла сразу — действием replace: старый файл в карантин, теги и
+    обложка остаются, откат — из журнала. Формат — как у заменяемого файла:
+    mp3 перекодируется в 320 кбит/с, opus и m4a кладутся как есть (иначе
+    Navidrome делит альбом надвое, см. codec_for). Иначе — вопрос в пульт;
   - место нашлось только у одного эталона — вопрос в пульт с обеими
     версиями: сам скрипт по одному источнику не меняет;
   - файл громче эталонов и нигде не тише — это и есть оригинал (original):
@@ -465,21 +466,39 @@ def duration(path):
         return None
 
 
-def prepare(src, lib, tmp):
+def codec_for(f, like):
+    """Расширение и кодек замены — в формате заменяемого файла.
+
+    Альбом из mp3 с одной дорожкой в opus Navidrome показывает двумя
+    альбомами: beets пишет в Vorbis-теги ещё и YEAR, Navidrome берёт его как
+    дату релиза («2023» против «2023-12-08» у mp3), а дата релиза входит в
+    признак альбома. Так «POX VAWË» раскололся надвое 2026-10-22. Поэтому
+    mp3 заменяется mp3 320 кбит/с — тем же, во что downtify перекодирует
+    звук YouTube, — а opus и m4a перекладываются без перекодирования."""
+    src = ".opus" if f.endswith(".webm") else os.path.splitext(f)[1].lower()
+    want = os.path.splitext(like)[1].lower()
+    if want == ".mp3":
+        return ".mp3", ["-c:a", "libmp3lame", "-b:a", "320k"]
+    if want == ".m4a" and src != ".m4a":
+        return ".m4a", ["-c:a", "aac", "-b:a", "256k"]
+    return src, ["-c:a", "copy"]
+
+
+def prepare(src, lib, tmp, like):
     """Звук эталона в хорошем качестве — в папку загрузок пульта, откуда его
-    берёт действие replace. Без перекодирования: opus из webm перекладывается
-    в .opus как есть. У загрузки другой формы отрезаются заставка и хвост."""
+    берёт действие replace, в формате заменяемого файла like (см. codec_for).
+    У загрузки другой формы отрезаются заставка и хвост."""
     length = lib["len"]
     f = download(src["id"], HIGH_FMT, tmp, "hi")
     if f is None:
         return None
-    ext = ".opus" if f.endswith(".webm") else os.path.splitext(f)[1].lower()
+    ext, codec = codec_for(f, like)
     os.makedirs(env.UPLOADS_DIR, exist_ok=True)
     dst = os.path.join(env.UPLOADS_DIR, "uncensor-%s-%d%s" % (src["id"], int(time.time()), ext))
     cmd = ["ffmpeg", "-v", "error", "-y"]
     if not src["same"] and src["shift"] > 0.05:
         cmd += ["-ss", "%.3f" % src["shift"]]
-    cmd += ["-i", f, "-vn", "-map_metadata", "-1", "-c:a", "copy"]
+    cmd += ["-i", f, "-vn", "-map_metadata", "-1"] + codec
     if not src["same"]:
         cmd += ["-t", "%.3f" % length]
     subprocess.run(cmd + [dst], capture_output=True, timeout=300)
@@ -608,7 +627,7 @@ def check(con, it, auto, path=None, verbose=False):
                                         else "спросил бы в пульте"))
             return verdict
 
-        file = prepare(src, lib, tmp) if src else None
+        file = prepare(src, lib, tmp, path) if src else None
         source = brief(src) if src else None
         refs_b = [brief(c) for c in refs]
         if can_auto and file:

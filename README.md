@@ -193,9 +193,14 @@ references:
    own tags there.
 
 A spot shown by two uploads is confirmed. If one of them has the same length
-and no offset, its audio (opus, ~140 kbps, not re-encoded) replaces the file
-through the usual `replace` action: the old file goes to quarantine, tags and
-artwork stay, and the replacement can be rolled back from the journal. A spot
+and no offset, its audio replaces the file through the usual `replace`
+action: the old file goes to quarantine, tags and artwork stay, and the
+replacement can be rolled back from the journal. The replacement keeps the
+format of the file it replaces — an mp3 becomes a 320 kbps mp3 (the same
+thing the downloader does with YouTube audio), opus and m4a are copied
+without re-encoding. Mixing formats inside one album splits it in Navidrome:
+beets writes a `YEAR` Vorbis comment, Navidrome reads it as the release date,
+and the release date is part of what makes two tracks the same album. A spot
 shown by a single upload, a lossless file, or a confirmed spot without a
 same-length source becomes a question in the panel with both versions and the
 synced lyric line (from lrclib) that was muted. When the file turns out to be
