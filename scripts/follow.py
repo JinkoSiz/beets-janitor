@@ -53,7 +53,8 @@ RESOLVE_PER_RUN = 40      # столько новых исполнителей �
 NEW_DAYS = 60             # релиз старше — не новинка, а поздно добавленный старый
 ARRIVE_HOURS = 6          # скачанное не доехало до фонотеки за столько — «не скачалось»
 RETRY_MAX = 3             # попыток скачать релиз, считая первую; дальше решать в пульте
-BOT = re.compile(r"not a bot|sign in to confirm", re.I)
+BOT = re.compile(r"not a bot|sign in to confirm(?! your age)", re.I)
+AGE = re.compile(r"confirm your age|inappropriate for some users", re.I)
 VA = {"various artists", "various", "va", "сборник", "разные исполнители", "v a"}
 
 
@@ -293,6 +294,8 @@ def fetch_error(message):
     """Причина из сообщения downtify: (вид, текст для пульта)."""
     if BOT.search(message):
         return "youtube", "YouTube временно не отдаёт звук (просит подтвердить, что не бот)"
+    if AGE.search(message):
+        return "youtube", "YouTube отдаёт эту загрузку только после входа (возрастное ограничение)"
     m = re.sub(r"^(error:\s*)+", "", message.strip(), flags=re.I)
     return "downtify", "downtify: %s" % (m[:120] or "ошибка")
 

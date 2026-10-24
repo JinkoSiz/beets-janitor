@@ -23,7 +23,8 @@ OG Buda так оказалось 11 треков из 41 (2026-10-22).
 3. Сравниваем с файлом: сдвиг по отпечатку, затем шагами по 0.1 с громкость
    и отпечаток окнами по 0.37 с. Загрузка, совпадающая с файлом меньше чем
    на 87%, — не та запись (другой мастеринг даёт 70–85%), она не эталон.
-     заглушено   файл тише эталона вдвое и больше, подряд от 0.3 с
+     заглушено   файл тише эталона вдвое и больше, подряд от 0.3 с, — или
+                 так тише только голос (300–3400 Гц), а бит играет
      заменено    отпечаток расходится подряд без провала громкости
                  (писк или реверс вместо слова)
      громче      наоборот, файл громче эталона: оригинал у нас, а заглушён
@@ -72,6 +73,7 @@ import json
 import os
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -123,11 +125,22 @@ QUIET = 0.45              # тише эталона в столько раз и 
 LOUD_MIN = 800            # тишину эталона с тишиной файла не сравниваем
 MIN_RUN = 3               # подряд шагов, чтобы место засчиталось
 FP_LOW = 0.65             # отпечаток окном в 3 значения ниже этого — заменено
+# голос отдельно от бита: полоса речи и порог относительно обычного для
+# трека отношения голоса файла к голосу эталона. Вместе с проверкой всей
+# полосы 0.5 на 10 заглушённых оригиналах OG Buda из карантина нашёл ещё
+# полтора десятка мест («lean», «опиаты», «курю паровозы»), а на заменённых
+# файлах и 7 чистых треках других исполнителей — ни одного; 0.6 даёт лишние
+VOICE = "highpass=f=300,lowpass=f=3400"
+VQUIET = 0.5
+VFLOOR = 0.3              # голос эталона тише медианы в столько раз — там не поют
 
 LOW_FMT = "139/233/worstaudio"
 HIGH_FMT = "251/140/bestaudio"
 
-BOT = re.compile(r"not a bot|sign in to confirm|HTTP Error 429|too many requests", re.I)
+# «Sign in to confirm your age» — не блок, а возрастное ограничение одной
+# загрузки: её пропускаем. Раньше оно останавливало прогон каждую ночь на
+# одной и той же дорожке, и очередь не двигалась (2026-10-23, 2026-10-24)
+BOT = re.compile(r"not a bot|sign in to confirm(?! your age)|HTTP Error 429|too many requests", re.I)
 JUNK = re.compile(
     r"sped ?up|speed ?up|slowed|reverb|nightcore|\b8d\b|bass ?boost|instrumental|инструментал|минус|"
     r"karaoke|караоке|acapella|a ?cappella|\bcover\b|кавер|remix|ремикс|reaction|реакция|разбор|обзор|"
@@ -288,14 +301,15 @@ def candidates(it, entries, length):
 
 
 # ---------------------------------------------------------------- сравнение
-def pcm(path):
-    raw = subprocess.run(["ffmpeg", "-v", "quiet", "-i", path, "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"],
+def pcm(path, af=None):
+    raw = subprocess.run(["ffmpeg", "-v", "quiet", "-i", path] + (["-af", af] if af else []) +
+                         ["-ac", "1", "-ar", str(SR), "-f", "s16le", "-"],
                          capture_output=True, timeout=300).stdout
     return array.array("h", raw)
 
 
-def envelope(path):
-    a = pcm(path)
+def envelope(path, af=None):
+    a = pcm(path, af)
     n = int(STEP * SR)
     return [(sum(x * x for x in a[i:i + n]) / n) ** 0.5 for i in range(0, len(a) - n + 1, n)]
 
@@ -333,8 +347,26 @@ def touches(span, others):
     return any(o[0] - 0.5 <= span[0] <= o[1] + 0.5 or o[0] - 0.5 <= span[1] <= o[1] + 0.5 for o in others)
 
 
+def voice_quiet(lv, cv, eo, lo, hi):
+    """Шаги, где голос файла заметно тише голоса эталона, хотя бит играет.
+
+    По всей полосе такое место тише меньше чем вдвое и прежде не ловилось:
+    «на грязном» в «Гикаю, Мажет» выключено, а громкость упала до 0.6–0.7
+    (2026-10-24). Сравниваем полосу речи и не напрямую, а против обычного
+    для трека отношения: загрузки бывают громче файла на весь трек."""
+    pairs = [(i, a, cv[i + eo]) for i, a in enumerate(lv) if lo <= i * STEP <= hi and 0 <= i + eo < len(cv)]
+    if not pairs:
+        return set()
+    floor = VFLOOR * statistics.median(b for _, _, b in pairs)
+    ratios = [(i, a / b) for i, a, b in pairs if b > floor]
+    if not ratios:
+        return set()
+    med = statistics.median(r for _, r in ratios)
+    return {i for i, r in ratios if r < VQUIET * med}
+
+
 def compare(lib, cand_path):
-    """Сравнить файл (lib: отпечаток, огибающая, длина) с загрузкой."""
+    """Сравнить файл (lib: отпечаток, огибающая, голос, длина) с загрузкой."""
     cf = verify.fingerprint(cand_path)
     if len(cf) < 40:
         return None
@@ -358,6 +390,7 @@ def compare(lib, cand_path):
             quiet.append(i)
         elif a > LOUD_MIN and b < QUIET * a:
             loud.append(i)
+    quiet = sorted(set(quiet) | voice_quiet(lib["voice"], envelope(cand_path, VOICE), eo, lo, hi))
     lf = lib["fp"]
     low = []
     for i in range(len(lf) - 3):
@@ -551,7 +584,7 @@ def check(con, it, auto, path=None, verbose=False):
     except OSError:
         return None
     name = "%s — %s" % (it.artist, it.title)
-    lib = {"fp": verify.fingerprint(path), "env": envelope(path)}
+    lib = {"fp": verify.fingerprint(path), "env": envelope(path), "voice": envelope(path, VOICE)}
     lib["len"] = len(lib["env"]) * STEP
     if len(lib["fp"]) < 40 or lib["len"] < 20:
         if not DRY:
