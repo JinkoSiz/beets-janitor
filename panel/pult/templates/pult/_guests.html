@@ -1,0 +1,37 @@
+{% load pult %}<div id="guests">
+  {% if reveal %}
+  <div class="finding" role="status">
+    <b>{% if reveal.new %}Гость {{ reveal.name }} заведён.{% else %}Новый пароль для {{ reveal.name }}.{% endif %}</b>
+    Пароль покажу только сейчас — скопируй и передай. Вход: {{ login_url }}, поле одно — пароль.
+    <div class="row" style="margin-top:8px">
+      <input type="text" readonly value="{{ reveal.password }}" id="guest-pw" class="mono" style="max-width:260px" aria-label="Пароль гостя" onclick="this.select()">
+      <button class="btn sm" type="button" onclick="var i=document.getElementById('guest-pw');i.select();navigator.clipboard&&navigator.clipboard.writeText(i.value);this.textContent='Скопировано'">Скопировать</button>
+    </div>
+  </div>
+  {% endif %}
+  {% if guests %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Гость</th><th>Заведён</th><th>Последний вход</th><th>Заявки</th><th></th></tr></thead>
+      <tbody>
+        {% for x in guests %}{% with g=x.row %}
+        <tr>
+          <td><b>{{ g.name }}</b>{% if g.disabled %} <span class="pill">отключён</span>{% endif %}</td>
+          <td class="mono">{{ g.created_at|when }}</td>
+          <td class="mono">{% if g.last_login %}{{ g.last_login|when }}{% else %}<span class="muted">ещё не входил</span>{% endif %}</td>
+          <td>{% if g.total %}<a href="/requests/?guest={{ g.name|urlencode }}">{{ g.total }}</a>{% if x.busy %} <span class="pill info">в работе {{ x.busy }}</span>{% endif %}{% if g.last_request %}<span class="sub">последняя {{ g.last_request|when }}</span>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td><span class="row" style="justify-content:flex-end">
+            <button class="btn sm" hx-post="/guests/reset" hx-vals='{"name": "{{ g.name|escapejs }}"}' hx-target="#guests" hx-swap="outerHTML" hx-confirm="Выдать {{ g.name }} новый пароль? Старый сразу перестанет подходить.">Новый пароль</button>
+            {% if g.disabled %}<button class="btn sm" hx-post="/guests/toggle" hx-vals='{"name": "{{ g.name|escapejs }}", "on": "1"}' hx-target="#guests" hx-swap="outerHTML">Включить</button>
+            {% else %}<button class="btn sm ghost" hx-post="/guests/toggle" hx-vals='{"name": "{{ g.name|escapejs }}", "on": "0"}' hx-target="#guests" hx-swap="outerHTML">Отключить</button>{% endif %}
+            <button class="btn sm ghost" hx-post="/guests/delete" hx-vals='{"name": "{{ g.name|escapejs }}"}' hx-target="#guests" hx-swap="outerHTML" hx-confirm="Удалить гостя {{ g.name }}? Войти он больше не сможет; его заявки останутся в истории.">Удалить</button>
+          </span></td>
+        </tr>
+        {% endwith %}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty"><b>Гостей пока нет</b>Заведи первого: впиши имя выше, пароль придумается сам.</div>
+  {% endif %}
+</div>

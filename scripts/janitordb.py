@@ -245,6 +245,15 @@ CREATE TABLE IF NOT EXISTS requests (
 );
 CREATE INDEX IF NOT EXISTS requests_guest ON requests(guest, created_at);
 CREATE INDEX IF NOT EXISTS requests_release ON requests(release_id);
+
+-- гости пульта: заводятся и отключаются в самом пульте («Гости»)
+CREATE TABLE IF NOT EXISTS guests (
+    name        TEXT PRIMARY KEY,
+    password    TEXT NOT NULL,             -- хэш Django, сам пароль не хранится
+    disabled    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    last_login  TEXT
+);
 """
 
 

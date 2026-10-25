@@ -8,6 +8,7 @@ library.db — только читает. Файлы фонотеки пульт
 import datetime
 import json
 import os
+import re
 import sqlite3
 import time
 
@@ -514,6 +515,52 @@ def guest_busy(con, guest):
     """Сколько заявок гостя ещё в работе: в очереди или качается."""
     return con.execute("SELECT count(DISTINCT q.release_id) FROM requests q JOIN releases r ON r.id=q.release_id "
                        "WHERE q.guest=? AND r.status IN ('queued','downloading')", (guest,)).fetchone()[0]
+
+
+GUEST_NAME = re.compile(r"^[\w.-]{1,32}$")
+
+
+def new_password():
+    import secrets
+    return secrets.token_urlsafe(12)
+
+
+def guests_list(con):
+    """Гости для страницы «Гости»: с числом заявок всего и в работе."""
+    rows = con.execute(
+        "SELECT g.*, (SELECT count(*) FROM requests q WHERE q.guest=g.name) AS total, "
+        "(SELECT max(created_at) FROM requests q WHERE q.guest=g.name) AS last_request "
+        "FROM guests g ORDER BY g.disabled, g.name COLLATE NOCASE").fetchall()
+    return [{"row": g, "busy": guest_busy(con, g["name"])} for g in rows]
+
+
+def guest_get(con, name):
+    g = con.execute("SELECT g.*, (SELECT count(*) FROM requests q WHERE q.guest=g.name) AS total, "
+                    "(SELECT max(created_at) FROM requests q WHERE q.guest=g.name) AS last_request "
+                    "FROM guests g WHERE name=?", (name,)).fetchone()
+    return {"row": g, "busy": guest_busy(con, name)} if g else None
+
+
+def guest_create(con, name):
+    """Завести гостя. Вернуть его пароль (показывается один раз) или текст ошибки
+    вторым значением."""
+    from django.contrib.auth.hashers import make_password
+    name = (name or "").strip()
+    if not GUEST_NAME.match(name):
+        return None, "Имя — до 32 букв, цифр, точек, дефисов и подчёркиваний, без пробелов"
+    if con.execute("SELECT 1 FROM guests WHERE name=? COLLATE NOCASE", (name,)).fetchone():
+        return None, "Гость «%s» уже есть" % name
+    pw = new_password()
+    con.execute("INSERT INTO guests(name, password, created_at) VALUES (?,?,?)", (name, make_password(pw), jdb.now()))
+    return pw, None
+
+
+def guest_reset(con, name):
+    """Новый пароль гостю; старый перестаёт подходить сразу."""
+    from django.contrib.auth.hashers import make_password
+    pw = new_password()
+    n = con.execute("UPDATE guests SET password=? WHERE name=?", (make_password(pw), name)).rowcount
+    return pw if n else None
 
 
 def requests_list(con, guest=None, limit=200):

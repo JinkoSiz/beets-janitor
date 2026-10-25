@@ -1,0 +1,23 @@
+{% extends "pult/base.html" %}{% load pult %}
+{% block title %}Гости{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="page-head">
+    <div>
+      <h1>Гости</h1>
+      <p>Гость входит по своему паролю и видит только «Дискографию» и «Мои заявки»: разбирает исполнителя и качает, чего нет в фонотеке. Решения, карантин, журнал и настройки ему закрыты. В работе у гостя разом — не больше {{ limit }} релизов; о каждой заявке приходит уведомление.</p>
+    </div>
+  </div>
+
+  <div class="panel addbox">
+    <div class="section-head"><h2>Новый гость</h2></div>
+    <form class="addrow" hx-post="/guests/add" hx-target="#guests" hx-swap="outerHTML" hx-on::after-request="if(event.detail.xhr.status===200) this.reset()">
+      <input type="text" name="name" placeholder="Имя, например xero" aria-label="Имя гостя" maxlength="32" required>
+      <button class="btn primary" type="submit">Завести</button>
+    </form>
+    <p class="muted" style="font-size:12.5px;margin:0">Пароль придумается сам и покажется один раз — передай его гостю вместе с адресом {{ login_url }}. Забыл — выдай новый.</p>
+  </div>
+
+  {% include "pult/_guests.html" %}
+</section>
+{% endblock %}

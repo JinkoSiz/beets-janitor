@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Вход в пульт: пароль хозяина и пароли гостей из окружения.
+"""Вход в пульт: пароль хозяина из окружения и пароли гостей из базы.
 
 Пульт смотрит в интернет через Nginx Proxy Manager, поэтому без входа не
 открывается ничего, кроме страницы входа, статики и проверки здоровья.
 Пароль хозяина не задан — не впускаем никого: безопаснее, чем открытая дверь.
 Перебор режется: после пяти неудач с одного адреса — пауза на 10 минут.
 
-Гости (PANEL_GUESTS=имя:пароль,имя2:пароль2; пароль можно и хэшем Django)
-видят только дискографию и свои заявки: разобрать исполнителя и скачать, чего
-нет. Решения, карантин, журнал и настройки им закрыты. Убрал гостя из
-окружения — его сессия перестаёт пускать со следующего запроса.
+Гостей хозяин заводит в самом пульте («Гости»): в janitor.db лежит только
+хэш пароля. Гость видит дискографию и свои заявки: разобрать исполнителя и
+скачать, чего нет. Решения, карантин, журнал и настройки ему закрыты.
+Отключил или удалил гостя — его сессия перестаёт пускать со следующего
+запроса.
 """
 import hmac
 import os
@@ -20,6 +21,10 @@ from django.contrib.auth.hashers import check_password
 from django.http import HttpResponse
 from django.shortcuts import redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
+
+import janitordb as jdb
+
+from . import data
 
 OPEN = ("/login", "/static/", "/health")
 # куда пускают гостя; разбор дорожек «уже есть / другая версия» — решение хозяина
@@ -35,37 +40,26 @@ def configured():
     return bool(os.environ.get("PANEL_PASSWORD_HASH") or os.environ.get("PANEL_PASSWORD"))
 
 
-def secret_ok(p, secret):
-    """Пароль против значения из окружения: хэш Django или открытый текст."""
-    if not p or not secret:
-        return False
-    if secret.split("$", 1)[0] in ("pbkdf2_sha256", "pbkdf2_sha1", "argon2", "bcrypt_sha256", "scrypt"):
-        return check_password(p, secret)
-    return hmac.compare_digest(p.encode("utf-8"), secret.encode("utf-8"))
-
-
 def password_ok(p):
     h = os.environ.get("PANEL_PASSWORD_HASH", "")
     if h:
         return check_password(p, h)
-    return secret_ok(p, os.environ.get("PANEL_PASSWORD", ""))
-
-
-def guests():
-    out = {}
-    for part in os.environ.get("PANEL_GUESTS", "").split(","):
-        name, _, secret = part.strip().partition(":")
-        if name.strip() and secret.strip():
-            out[name.strip()] = secret.strip()
-    return out
+    plain = os.environ.get("PANEL_PASSWORD", "")
+    return bool(plain) and hmac.compare_digest(p.encode("utf-8"), plain.encode("utf-8"))
 
 
 def guest_for(p):
-    """Имя гостя с этим паролем или None."""
-    for name, secret in guests().items():
-        if secret_ok(p, secret):
-            return name
+    """Имя включённого гостя с этим паролем или None."""
+    if not p:
+        return None
+    for g in data.jcon().execute("SELECT name, password FROM guests WHERE disabled=0"):
+        if check_password(p, g["password"]):
+            return g["name"]
     return None
+
+
+def guest_active(name):
+    return data.jcon().execute("SELECT 1 FROM guests WHERE name=? AND disabled=0", (name,)).fetchone() is not None
 
 
 def guest_of(request):
@@ -107,7 +101,7 @@ class LoginRequired:
             return redirect("/login?next=" + quote(request.get_full_path()))
         guest = guest_of(request)
         if guest is not None:
-            if guest not in guests():
+            if not guest_active(guest):
                 request.session.flush()
                 return _away(request, "/login")
             if not request.path.startswith(GUEST_OPEN) or request.path.startswith(GUEST_CLOSED):
@@ -125,7 +119,6 @@ def login_view(request):
     elif request.method == "POST":
         ip = client_ip(request)
         p = request.POST.get("password", "")
-        guest = None if blocked(ip) or password_ok(p) else guest_for(p)
         if blocked(ip):
             error = "Слишком много попыток. Подождите десять минут."
         elif password_ok(p):
@@ -134,11 +127,12 @@ def login_view(request):
             request.session["ok"] = True
             request.session.pop("guest", None)
             return redirect(nxt)
-        elif guest:
+        elif (guest := guest_for(p)) is not None:
             _fails.pop(ip, None)
             request.session.cycle_key()
             request.session["ok"] = True
             request.session["guest"] = guest
+            data.jcon().execute("UPDATE guests SET last_login=? WHERE name=?", (jdb.now(), guest))
             return redirect(nxt if nxt.startswith(GUEST_OPEN) else GUEST_HOME)
         else:
             _fails.setdefault(ip, []).append(time.time())

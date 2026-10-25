@@ -501,12 +501,70 @@ def disco_download(request, aid):
     return resp
 
 
+# ---------------------------------------------------------------- гости
+def _login_url(request):
+    origin = (os.environ.get("PANEL_ORIGINS", "").split(",")[0] or "").strip()
+    return (origin.rstrip("/") + "/login") if origin else request.build_absolute_uri("/login")
+
+
+def _guests(request, con, text=None, reveal=None):
+    resp = render(request, "pult/_guests.html", {"guests": data.guests_list(con), "reveal": reveal,
+                                                 "login_url": _login_url(request)})
+    return toast(resp, text) if text else resp
+
+
+def guests_view(request):
+    con = data.jcon()
+    return render(request, "pult/guests.html", {"guests": data.guests_list(con), "limit": data.GUEST_LIMIT,
+                                                "login_url": _login_url(request)})
+
+
+@require_POST
+def guest_add(request):
+    con = data.jcon()
+    name = request.POST.get("name", "").strip()
+    pw, err = data.guest_create(con, name)
+    if err:
+        return toast(HttpResponse(status=204), err)
+    return _guests(request, con, "Гость %s заведён" % name, {"name": name, "password": pw, "new": True})
+
+
+@require_POST
+def guest_reset(request):
+    con = data.jcon()
+    name = request.POST.get("name", "")
+    pw = data.guest_reset(con, name)
+    if pw is None:
+        return toast(HttpResponse(status=204), "Такого гостя нет")
+    return _guests(request, con, "Новый пароль для %s; старый больше не подходит" % name,
+                   {"name": name, "password": pw, "new": False})
+
+
+@require_POST
+def guest_toggle(request):
+    con = data.jcon()
+    name = request.POST.get("name", "")
+    on = request.POST.get("on") == "1"
+    con.execute("UPDATE guests SET disabled=? WHERE name=?", (0 if on else 1, name))
+    return _guests(request, con, ("%s снова может входить" if on else "%s отключён: вход и открытые страницы закрыты") % name)
+
+
+@require_POST
+def guest_delete(request):
+    con = data.jcon()
+    name = request.POST.get("name", "")
+    con.execute("DELETE FROM guests WHERE name=?", (name,))
+    return _guests(request, con, "Гость %s удалён; его заявки остаются в истории" % name)
+
+
 def requests_view(request):
-    """Заявки гостей: гостю — свои, хозяину — все, с именами."""
+    """Заявки гостей: гостю — свои, хозяину — все или одного гостя (?guest=)."""
     con = data.jcon()
     guest = auth.guest_of(request)
-    return render(request, "pult/requests.html", {"reqs": data.requests_list(con, guest), "limit": data.GUEST_LIMIT,
-                                                  "busy": data.guest_busy(con, guest) if guest else None})
+    only = guest or request.GET.get("guest") or None
+    return render(request, "pult/requests.html", {"reqs": data.requests_list(con, only), "limit": data.GUEST_LIMIT,
+                                                  "busy": data.guest_busy(con, guest) if guest else None,
+                                                  "only": None if guest else only})
 
 
 @require_POST
