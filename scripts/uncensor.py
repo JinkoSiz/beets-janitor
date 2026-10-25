@@ -24,7 +24,7 @@ OG Buda так оказалось 11 треков из 41 (2026-10-22).
    и отпечаток окнами по 0.37 с. Загрузка, совпадающая с файлом меньше чем
    на 87%, — не та запись (другой мастеринг даёт 70–85%), она не эталон.
      заглушено   файл тише эталона вдвое и больше, подряд от 0.3 с, — или
-                 так тише только голос (300–3400 Гц), а бит играет
+                 тише только голос (300–3400 Гц), от 0.2 с, а бит играет
      заменено    отпечаток расходится подряд без провала громкости
                  (писк или реверс вместо слова)
      громче      наоборот, файл громче эталона: оригинал у нас, а заглушён
@@ -129,9 +129,13 @@ FP_LOW = 0.65             # отпечаток окном в 3 значения 
 # трека отношения голоса файла к голосу эталона. Вместе с проверкой всей
 # полосы 0.5 на 10 заглушённых оригиналах OG Buda из карантина нашёл ещё
 # полтора десятка мест («lean», «опиаты», «курю паровозы»), а на заменённых
-# файлах и 7 чистых треках других исполнителей — ни одного; 0.6 даёт лишние
+# файлах и 7 чистых треках других исполнителей — ни одного; 0.6 даёт лишние.
+# Вставки вроде «(грязь)» в «Крит» звучат 0.2 с, поэтому голосу хватает двух
+# шагов подряд; с 0.55 так нашлись ещё «pour up», «гикаю на заднем»,
+# «дилеры», а на 19 заменённых файлах по-прежнему ни одного места (2026-10-25)
 VOICE = "highpass=f=300,lowpass=f=3400"
-VQUIET = 0.5
+VQUIET = 0.55
+VMIN_RUN = 2
 VFLOOR = 0.3              # голос эталона тише медианы в столько раз — там не поют
 
 LOW_FMT = "139/233/worstaudio"
@@ -343,6 +347,17 @@ def runs(idx, gap=1, min_len=MIN_RUN):
     return out
 
 
+def merged(spans):
+    """Пересекающиеся и соседние отрезки — в один."""
+    out = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1] + 1:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
 def touches(span, others):
     return any(o[0] - 0.5 <= span[0] <= o[1] + 0.5 or o[0] - 0.5 <= span[1] <= o[1] + 0.5 for o in others)
 
@@ -390,7 +405,8 @@ def compare(lib, cand_path):
             quiet.append(i)
         elif a > LOUD_MIN and b < QUIET * a:
             loud.append(i)
-    quiet = sorted(set(quiet) | voice_quiet(lib["voice"], envelope(cand_path, VOICE), eo, lo, hi))
+    vq = voice_quiet(lib["voice"], envelope(cand_path, VOICE), eo, lo, hi)
+    quiet = sorted(set(quiet) | vq)
     lf = lib["fp"]
     low = []
     for i in range(len(lf) - 3):
@@ -398,7 +414,8 @@ def compare(lib, cand_path):
             continue
         if 1 - sum(verify._bits(lf[k] ^ cf[k + off]) for k in range(i, i + 3)) / 96.0 < FP_LOW:
             low.append(i)
-    quiet_s = [(a * STEP, (b + 1) * STEP) for a, b in runs(quiet)]
+    quiet_s = [(a * STEP, (b + 1) * STEP)
+               for a, b in merged(runs(quiet) + runs(sorted(vq), gap=0, min_len=VMIN_RUN))]
     loud_s = [(a * STEP, (b + 1) * STEP) for a, b in runs(loud)]
     other_s = [s for s in ((a * FR, (b + 3) * FR) for a, b in runs(low)) if not touches(s, quiet_s + loud_s)]
     return {"sim": sim, "shift": shift, "len": cand_len, "same": same,
