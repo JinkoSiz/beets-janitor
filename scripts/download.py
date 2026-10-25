@@ -226,22 +226,67 @@ def mmss(sec):
     return "%d:%02d" % (int(sec) // 60, int(sec) % 60)
 
 
+COVERED = ("queued", "downloading", "in_library")
+
+
+def orphans(con, rel, rows):
+    """Повторы, которые не придут ни с каким другим релизом.
+
+    Разбор помечает повтором дорожку, уже встреченную в другом релизе
+    дискографии, и качаться она должна с тем релизом. Но если выбрали только
+    сборник, а оригинальные альбомы — нет, его повторы не качались нигде: у
+    Romantic Collection Скриптонита так пропало 16 треков из 23 (2026-10-25).
+    Повтор качаем с этим релизом, если его двойник (тот же ISRC, а без ISRC —
+    то же название и длина у того же исполнителя) не лежит в фонотеке и его
+    релиз не качается и не скачан.
+    """
+    out = []
+    for t in rows:
+        decision = t["decision"] if "decision" in t.keys() else None
+        if t["verdict"] != "dup" or decision:
+            continue
+        twins = con.execute(
+            "SELECT x.title, x.duration, x.isrc, x.verdict, x.decision, r.status FROM release_tracks x "
+            "JOIN releases r ON r.id = x.release_id WHERE r.artist_id=? AND x.release_id<>? AND "
+            + ("x.isrc=?" if t["isrc"] else "(x.isrc IS NULL OR x.isrc='')"),
+            (rel["artist_id"], rel["id"]) + ((t["isrc"],) if t["isrc"] else ())).fetchall()
+        if not t["isrc"]:
+            key = disco.norm_title(t["title"])
+            twins = [x for x in twins if disco.norm_title(x["title"]) == key
+                     and abs((x["duration"] or 0) - (t["duration"] or 0)) <= disco.LEN_SAME]
+        covered = any(x["status"] in COVERED or x["verdict"] in ("have_isrc", "have_same")
+                      or x["decision"] == "skip" for x in twins)
+        if not covered:
+            out.append(t)
+    return out
+
+
 def find_songs(con, rel, rows, want, artist, alt=False):
     """Песни downtify для дорожек want и то, что в Spotify не нашлось:
     названия и описания версий другой длины («Making Promises» 2:24 вместо
     1:57). alt — такие версии брать: человек так решил в пульте."""
     songs, missing, other = [], [], []
-    # весь релиз — одним альбомом: так downtify сохранит номера дорожек
-    if len(want) == len(rows) and rel["provider"] == "deezer":
+    rest = want
+    # альбом Spotify по UPC релиза: дорожки придут с его названием и номерами.
+    # Раньше так качался только релиз целиком, а часть — поиском по ISRC, и он
+    # отдаёт первый попавшийся релиз с этой записью: «Slow Mo» со сборника
+    # Скриптонита легла в альбом Armich «Смесь», «Локоны» — синглом (2026-10-25)
+    if rel["provider"] == "deezer":
         alb = disco.deezer("album/%s" % rel["provider_id"]) or {}
         sid = album_by_upc(alb["upc"]) if alb.get("upc") else None
         if sid:
-            songs = downtify_songs("https://open.spotify.com/album/" + sid)
-            ids = album_track_ids(want, songs)
+            album = downtify_songs("https://open.spotify.com/album/" + sid)
+            ids = album_track_ids(rows, album)
+            whole = len(want) == len(rows)
+            take = {ids[t["id"]] for t in want if ids.get(t["id"])}
+            songs = album if whole else [s for s in album if s.get("song_id") in take]
             for t in want:
                 note_track(con, t, ids.get(t["id"]), searched=False)
-    if not songs:
-        for t in want:
+            # весь релиз — альбомом целиком, как раньше; из части — по одной
+            # только то, что в альбоме Spotify не сопоставилось
+            rest = [] if whole else [t for t in want if not ids.get(t["id"])]
+    if rest:
+        for t in rest:
             alts = []
             sid = (track_by_isrc(t["isrc"], t["duration"], alts) if t["isrc"] else None) or \
                 track_by_name(artist, t["title"], t["duration"], alts)
@@ -270,7 +315,7 @@ def release(con, release_id, artist_name=None, retry=False, alt=False):
     if rel is None:
         raise ValueError("нет такого релиза")
     rows = con.execute("SELECT * FROM release_tracks WHERE release_id=? ORDER BY id", (release_id,)).fetchall()
-    want = [t for t in rows if disco.wanted(t)]
+    want = [t for t in rows if disco.wanted(t)] + orphans(con, rel, rows)
     if want and retry:
         import follow
         want = follow.not_arrived(disco.Library(), rel, want)

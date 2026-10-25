@@ -357,8 +357,9 @@ def recheck_downloads(con, lib):
     for rel in con.execute("SELECT r.*, a.name AS artist, a.deezer_name FROM releases r "
                            "LEFT JOIN artists a ON a.id=r.artist_id "
                            "WHERE r.status IN ('queued', 'downloading', 'failed')").fetchall():
-        tracks = [t for t in con.execute("SELECT * FROM release_tracks WHERE release_id=? ORDER BY id", (rel["id"],))
-                  if disco.wanted(t)]
+        rows = con.execute("SELECT * FROM release_tracks WHERE release_id=? ORDER BY id", (rel["id"],)).fetchall()
+        # повторы без своего релиза качаются с этим (download.orphans) — их и ждём
+        tracks = [t for t in rows if disco.wanted(t)] + download.orphans(con, rel, rows)
         if not tracks:
             continue
         rest = not_arrived(lib, rel, tracks)
