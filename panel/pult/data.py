@@ -46,6 +46,22 @@ def enqueue(con, kind, payload, review_id=None):
     return aid
 
 
+def notify(text):
+    """Сообщение в уведомлялку (Telegram): файл .msg в SPOOL_DIR, если папка
+    смонтирована. Пишется под другим именем и переименовывается — уведомлялка
+    не подхватит недописанное."""
+    d = os.environ.get("SPOOL_DIR", "")
+    if not d or not os.path.isdir(d):
+        return
+    base = os.path.join(d, "beets-panel-%d" % int(time.time() * 1000))
+    try:
+        with open(base + ".tmp", "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(base + ".tmp", base + ".msg")
+    except OSError:
+        pass
+
+
 def abspath(p):
     """Путь из library.db: bytes и относительный к папке фонотеки."""
     if isinstance(p, bytes):
@@ -483,10 +499,32 @@ def releases(con, f=None):
         if r["status"] == "failed":
             alt = con.execute("SELECT count(*) FROM release_tracks WHERE release_id=? "
                               "AND json_extract(info, '$.spotify_alt.id') IS NOT NULL", (r["id"],)).fetchone()[0]
+        req = [g for g, in con.execute("SELECT DISTINCT guest FROM requests WHERE release_id=?", (r["id"],))]
         out.append({"row": r, "counts": c, "status": REL_STATUS.get(r["status"], (r["status"], "")),
                     "type": TYPE_TEXT.get(r["type"], r["type"] or ""), "get": c.get("get", 0),
-                    "have": c.get("have", 0) + c.get("dup", 0), "owner": owner, "alt": alt})
+                    "have": c.get("have", 0) + c.get("dup", 0), "owner": owner, "alt": alt, "req": req})
     return out
+
+
+# ---------------------------------------------------------------- заявки гостей
+GUEST_LIMIT = 20          # релизов в работе у одного гостя разом
+
+
+def guest_busy(con, guest):
+    """Сколько заявок гостя ещё в работе: в очереди или качается."""
+    return con.execute("SELECT count(DISTINCT q.release_id) FROM requests q JOIN releases r ON r.id=q.release_id "
+                       "WHERE q.guest=? AND r.status IN ('queued','downloading')", (guest,)).fetchone()[0]
+
+
+def requests_list(con, guest=None, limit=200):
+    """Заявки, свежие первыми: гостя или все."""
+    where, args = ("WHERE q.guest=?", (guest,)) if guest else ("", ())
+    rows = con.execute(
+        "SELECT r.*, q.guest, q.created_at, coalesce(a.deezer_name, a.name) AS artist FROM requests q "
+        "JOIN releases r ON r.id=q.release_id LEFT JOIN artists a ON a.id=r.artist_id %s "
+        "ORDER BY q.id DESC LIMIT %d" % (where, limit), args).fetchall()
+    return [{"row": r, "status": REL_STATUS.get(r["status"], (r["status"], "")),
+             "type": TYPE_TEXT.get(r["type"], r["type"] or "")} for r in rows]
 
 
 def release_counts(con):

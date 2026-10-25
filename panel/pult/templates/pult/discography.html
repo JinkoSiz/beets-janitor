@@ -73,7 +73,7 @@
     {% endif %}
   </form>
 
-  {% if d.asks %}
+  {% if d.asks and not guest %}
   <div class="group-title"><h2>Спросить <span class="muted">· {{ d.asks|length }} {{ d.asks|length|plural:"трек,трека,треков" }}</span></h2></div>
   <div class="table-wrap">
     <table>

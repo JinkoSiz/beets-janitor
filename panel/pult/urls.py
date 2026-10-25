@@ -35,6 +35,8 @@ urlpatterns = [
     path("discography/<int:aid>/download", views.disco_download, name="disco_download"),
     path("discography/track/<int:tid>", views.disco_track, name="disco_track"),
 
+    path("requests/", views.requests_view, name="requests"),
+
     path("covers/", views.covers, name="covers"),
     path("covers/<int:rid>/upload", views.cover_upload, name="cover_upload"),
 

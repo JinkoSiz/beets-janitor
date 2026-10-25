@@ -234,6 +234,17 @@ CREATE TABLE IF NOT EXISTS censor (
     checked_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS censor_verdict ON censor(verdict);
+
+-- заявки гостей пульта: кто какой релиз попросил (качается сразу, как и
+-- у хозяина; здесь — чтобы гость видел свои, а хозяин — от кого)
+CREATE TABLE IF NOT EXISTS requests (
+    id          INTEGER PRIMARY KEY,
+    release_id  INTEGER NOT NULL REFERENCES releases(id) ON DELETE CASCADE,
+    guest       TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS requests_guest ON requests(guest, created_at);
+CREATE INDEX IF NOT EXISTS requests_release ON requests(release_id);
 """
 
 

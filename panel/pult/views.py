@@ -40,7 +40,11 @@ def toast(resp, text):
 
 
 def nav(request):
-    """Счётчики меню и состояние сторожа — для всех полных страниц."""
+    """Счётчики меню и состояние сторожа — для всех полных страниц. Гостю —
+    только его имя: счётчики и сторож его не касаются."""
+    guest = auth.guest_of(request)
+    if guest is not None:
+        return {"guest": guest, "page": request.resolver_match.url_name if request.resolver_match else ""}
     if request.headers.get("HX-Request") or not request.session.get("ok"):
         return {}
     try:
@@ -331,7 +335,9 @@ def artists_search(request):
         cands = _search(q)
     except Exception as e:
         return HttpResponse('<p class="muted">Deezer не ответил: %s</p>' % str(e)[:80])
-    return render(request, "pult/_cands.html", {"cands": cands, "q": q, "mode": request.GET.get("mode", "follow")})
+    # гость исполнителей не заводит в слежку — только разбирает дискографию
+    mode = "disco" if auth.guest_of(request) is not None else request.GET.get("mode", "follow")
+    return render(request, "pult/_cands.html", {"cands": cands, "q": q, "mode": mode})
 
 
 def _ensure_artist(con, deezer_id, name, picture, follow):
@@ -458,24 +464,49 @@ def disco_job(request, job_id):
 @require_POST
 def disco_download(request, aid):
     con = data.jcon()
+    guest = auth.guest_of(request)
     versions = request.POST.get("versions") == "1"
     ids = [int(x) for x in request.POST.getlist("rel") if x.isdigit()]
     if not ids:
         return toast(HttpResponse(status=204), "Не выбрано ни одного релиза")
-    n = 0
+    if guest is not None:
+        busy = data.guest_busy(con, guest)
+        if busy + len(ids) > data.GUEST_LIMIT:
+            return toast(HttpResponse(status=204), "В работе уже %d заявок из %d: дождись, пока скачаются"
+                         % (busy, data.GUEST_LIMIT))
+    n, titles = 0, []
     for rid in ids:
-        rel = con.execute("SELECT id, status FROM releases WHERE id=? AND artist_id=?", (rid, aid)).fetchone()
+        rel = con.execute("SELECT id, status, title FROM releases WHERE id=? AND artist_id=?", (rid, aid)).fetchone()
         if rel is None:
+            continue
+        if guest is not None and rel["status"] in ("queued", "downloading", "in_library"):
             continue
         if versions:
             con.execute("UPDATE release_tracks SET decision='get' WHERE release_id=? AND verdict='version' "
                         "AND decision IS NULL", (rid,))
         data.enqueue(con, "download", {"release_id": rid, "retry": 1} if rel["status"] == "failed" else {"release_id": rid})
         con.execute("UPDATE releases SET status='queued', decided_at=?, note=NULL WHERE id=?", (jdb.now(), rid))
+        if guest is not None:
+            con.execute("INSERT INTO requests(release_id, guest, created_at) VALUES (?,?,?)", (rid, guest, jdb.now()))
+        titles.append(rel["title"])
         n += 1
+    if guest is not None and not titles:
+        return toast(HttpResponse(status=204), "Это уже качается или лежит в фонотеке")
+    if guest is not None:
+        a = con.execute("SELECT coalesce(deezer_name, name) FROM artists WHERE id=?", (aid,)).fetchone()
+        data.notify("beets: %s скачивает %s — %s%s" % (
+            guest, a[0] if a else "?", ", ".join(titles[:5]), " и ещё %d" % (len(titles) - 5) if len(titles) > 5 else ""))
     resp = toast(HttpResponse(""), "В очередь на скачивание: %d %s" % (n, "релиз" if n == 1 else "релиза" if n < 5 else "релизов"))
-    resp["HX-Redirect"] = "/releases/?f=work"
+    resp["HX-Redirect"] = "/requests/" if guest is not None else "/releases/?f=work"
     return resp
+
+
+def requests_view(request):
+    """Заявки гостей: гостю — свои, хозяину — все, с именами."""
+    con = data.jcon()
+    guest = auth.guest_of(request)
+    return render(request, "pult/requests.html", {"reqs": data.requests_list(con, guest), "limit": data.GUEST_LIMIT,
+                                                  "busy": data.guest_busy(con, guest) if guest else None})
 
 
 @require_POST

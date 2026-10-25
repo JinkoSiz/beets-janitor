@@ -1,0 +1,35 @@
+{% extends "pult/base.html" %}{% load pult %}
+{% block title %}{% if guest %}Мои заявки{% else %}Заявки гостей{% endif %}{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="page-head">
+    <div>
+      <h1>{% if guest %}Мои заявки{% else %}Заявки гостей{% endif %}</h1>
+      {% if guest %}
+      <p>Что ты скачал через «Дискографию». Релиз сначала встаёт в очередь, потом качается и через несколько минут появляется в фонотеке. В работе разом — не больше {{ limit }} релизов{% if busy %}, сейчас {{ busy }}{% endif %}.</p>
+      {% else %}
+      <p>Что гости скачали через «Дискографию». Качается сразу, как и у тебя; не скачавшееся — в «Новинках» с пометкой «заявка».</p>
+      {% endif %}
+    </div>
+  </div>
+  {% if reqs %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Релиз</th>{% if not guest %}<th>Гость</th>{% endif %}<th>Когда</th><th>Что с ним</th></tr></thead>
+      <tbody>
+        {% for x in reqs %}{% with r=x.row %}
+        <tr>
+          <td><b>{{ r.title }}</b><span class="sub">{{ r.artist }} · {{ x.type }}{% if r.release_date %} · {{ r.release_date|slice:":4" }}{% endif %}{% if r.tracks_total %} · {{ r.tracks_total }} {{ r.tracks_total|plural:"трек,трека,треков" }}{% endif %}</span></td>
+          {% if not guest %}<td>{{ r.guest }}</td>{% endif %}
+          <td class="mono">{{ r.created_at|when }}</td>
+          <td><span class="pill {{ x.status.1 }}">{{ x.status.0 }}</span>{% if r.status == 'failed' and r.note %}<span class="sub">{{ r.note }}</span>{% endif %}</td>
+        </tr>
+        {% endwith %}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty"><b>Заявок пока нет</b>{% if guest %}Открой «Дискографию», найди исполнителя и скачай, чего нет в фонотеке.{% else %}Сюда попадает то, что гости скачали через «Дискографию».{% endif %}</div>
+  {% endif %}
+</section>
+{% endblock %}
