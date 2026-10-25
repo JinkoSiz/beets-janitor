@@ -478,9 +478,14 @@ def releases(con, f=None):
             # у фита хозяин — главный исполнитель дорожек, а не тот, за кем следим
             t = con.execute("SELECT info FROM release_tracks WHERE release_id=? LIMIT 1", (r["id"],)).fetchone()
             owner = (loads(t["info"], {}) or {}).get("artist") if t else None
+        # в Spotify только версия другой длины: её можно взять кнопкой
+        alt = 0
+        if r["status"] == "failed":
+            alt = con.execute("SELECT count(*) FROM release_tracks WHERE release_id=? "
+                              "AND json_extract(info, '$.spotify_alt.id') IS NOT NULL", (r["id"],)).fetchone()[0]
         out.append({"row": r, "counts": c, "status": REL_STATUS.get(r["status"], (r["status"], "")),
                     "type": TYPE_TEXT.get(r["type"], r["type"] or ""), "get": c.get("get", 0),
-                    "have": c.get("have", 0) + c.get("dup", 0), "owner": owner})
+                    "have": c.get("have", 0) + c.get("dup", 0), "owner": owner, "alt": alt})
     return out
 
 

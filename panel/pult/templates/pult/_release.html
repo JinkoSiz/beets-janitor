@@ -13,7 +13,8 @@
       {% if r.status == 'new' or r.status == 'failed' %}
       <span class="row">
         <button class="btn sm ghost" hx-post="/releases/{{ r.id }}/skip" hx-target="#rel-{{ r.id }}" hx-swap="outerHTML">Пропустить</button>
-        {% if r.status == 'failed' %}<button class="btn sm primary" hx-post="/releases/{{ r.id }}/get" hx-target="#rel-{{ r.id }}" hx-swap="outerHTML">Ещё раз</button>
+        {% if r.status == 'failed' and x.alt %}<button class="btn sm primary" hx-post="/releases/{{ r.id }}/get-alt" hx-target="#rel-{{ r.id }}" hx-swap="outerHTML" title="В Spotify эта песня другой длины — скачать её">Взять версию Spotify</button>
+        {% elif r.status == 'failed' %}<button class="btn sm primary" hx-post="/releases/{{ r.id }}/get" hx-target="#rel-{{ r.id }}" hx-swap="outerHTML">Ещё раз</button>
         {% elif x.get or x.counts.ask %}<button class="btn sm primary" hx-post="/releases/{{ r.id }}/get" hx-target="#rel-{{ r.id }}" hx-swap="outerHTML">Скачать</button>{% endif %}
       </span>
       {% elif r.link %}

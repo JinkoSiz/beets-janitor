@@ -434,7 +434,7 @@ def do_download(con, lib, p):
     # импортирует его сторож обычным порядком
     import download
     try:
-        return download.release(con, int(p["release_id"]), retry=bool(p.get("retry")))
+        return download.release(con, int(p["release_id"]), retry=bool(p.get("retry")), alt=bool(p.get("alt")))
     except Exception as e:
         # иначе релиз так и висел бы «в очереди»: в пульте он станет
         # «не скачалось» с причиной и кнопкой «Ещё раз»

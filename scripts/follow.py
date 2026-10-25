@@ -394,8 +394,12 @@ def recheck_downloads(con, lib):
         for why in sorted(set(broken.values())):
             ts = [t for t in rest if broken.get(t["id"]) == why]
             parts.append(why[1] if len(ts) == len(tracks) else "%s: %s" % (why[1], titles(ts)))
+        other = [t for t in lost if (jdb.loads(t["info"], {}) or {}).get("spotify_alt")]
+        lost = [t for t in lost if t not in other]
         if lost:
             parts.append("в Spotify не нашлось: " + titles(lost))
+        if other:
+            parts.append("в Spotify только другая версия: " + titles(other))
         if late:
             parts.append("не доехало до фонотеки: " + titles(late))
         if broken and attempts(con, rel["id"]) < RETRY_MAX:

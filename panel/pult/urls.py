@@ -19,6 +19,7 @@ urlpatterns = [
     path("releases/get-all", views.release_get_all, name="release_get_all"),
     path("releases/retry-all", views.release_retry_all, name="release_retry_all"),
     path("releases/<int:rel_id>/get", views.release_get, name="release_get"),
+    path("releases/<int:rel_id>/get-alt", views.release_get_alt, name="release_get_alt"),
     path("releases/<int:rel_id>/skip", views.release_skip, name="release_skip"),
     path("flag", views.set_flag, name="flag"),
 

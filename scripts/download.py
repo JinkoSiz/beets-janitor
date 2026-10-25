@@ -35,6 +35,9 @@ import env  # noqa: E402
 import janitordb as jdb  # noqa: E402
 
 LEN_OK = 5          # секунд расхождения длины между Deezer и Spotify
+# у длинных треков и доля длины: «Am I Evil?» по тому же ISRC в Deezer 465 с,
+# в Spotify 470 — 5 секунд отбрасывали его как «нет в Spotify» (2026-10-25)
+LEN_REL = 0.015
 SPOTIFY_DOWN = "Spotify API не отвечает"   # по этому началу follow.py узнаёт такой сбой
 
 
@@ -106,26 +109,37 @@ def spotify(path, **params):
     return r.json()
 
 
-def track_by_isrc(isrc, duration=None):
+def len_ok(a, b):
+    return abs(a - b) <= max(LEN_OK, LEN_REL * max(a, b))
+
+
+def track_by_isrc(isrc, duration=None, alts=None):
+    """id трека Spotify с этим ISRC. Тот же ISRC, но другой длины — в alts:
+    это другая версия, брать её решает человек."""
     j = spotify("search", q="isrc:" + isrc, type="track", limit=5) or {}
     for t in (j.get("tracks") or {}).get("items") or []:
-        if duration and abs(t.get("duration_ms", 0) / 1000.0 - duration) > LEN_OK:
+        if duration and not len_ok(t.get("duration_ms", 0) / 1000.0, duration):
+            if alts is not None:
+                alts.append(t)
             continue
         return t["id"]
     return None
 
 
-def track_by_name(artist, title, duration):
-    """Запасной путь, когда ISRC не нашёлся: имя и длина должны сойтись."""
+def track_by_name(artist, title, duration, alts=None):
+    """Запасной путь, когда ISRC не нашёлся: имя и длина должны сойтись.
+    Тот же исполнитель и название, но другая длина — в alts."""
     q = 'track:"%s" artist:"%s"' % (disco.norm_title(title) or title, artist)
     j = spotify("search", q=q, type="track", limit=10) or {}
     for t in (j.get("tracks") or {}).get("items") or []:
         names = [a.get("name") for a in t.get("artists") or []]
         if not any(disco.name_keys(n) & disco.name_keys(artist) for n in names):
             continue
-        if duration and abs(t.get("duration_ms", 0) / 1000.0 - duration) > LEN_OK:
-            continue
         if disco.norm_title(t.get("name")) != disco.norm_title(title):
+            continue
+        if duration and not len_ok(t.get("duration_ms", 0) / 1000.0, duration):
+            if alts is not None:
+                alts.append(t)
             continue
         return t["id"]
     return None
@@ -154,18 +168,24 @@ def downtify_batch(songs):
 
 
 # ---------------------------------------------------------------- релиз
-def note_track(con, t, sid, searched=True):
+def note_track(con, t, sid, searched=True, alt=None):
     """Запомнить у дорожки, под каким id Spotify она ушла в downtify.
 
     По этому id follow.py узнает её в фонотеке: название и имя исполнителя в
     Spotify бывают другими, чем в Deezer. spotify_id = None — искали, но в
     Spotify её нет; ключа нет вовсе — ушла с альбомом, id не сопоставился.
+    spotify_alt — в Spotify есть только версия другой длины: по ней в пульте
+    кнопка «Взять версию Spotify».
     """
     info = jdb.loads(t["info"], {})
     if sid or searched:
         info["spotify_id"] = sid
     else:
         info.pop("spotify_id", None)
+    if alt and not sid:
+        info["spotify_alt"] = {"id": alt["id"], "length": round(alt.get("duration_ms", 0) / 1000.0)}
+    else:
+        info.pop("spotify_alt", None)
     # сбой прошлой попытки (follow.py) к новой отношения не имеет
     info.pop("fetch_error", None)
     con.execute("UPDATE release_tracks SET info=? WHERE id=?", (json.dumps(info, ensure_ascii=False), t["id"]))
@@ -192,19 +212,25 @@ def album_track_ids(tracks, songs):
     for n, t in enumerate(tracks):
         for s in songs:
             if disco.title_keys(s.get("name")) & disco.title_keys(t["title"]) and \
-                    abs(float(s.get("duration") or 0) - (t["duration"] or 0)) <= LEN_OK:
+                    len_ok(float(s.get("duration") or 0), t["duration"] or 0):
                 out[t["id"]] = s.get("song_id")
                 break
         else:
             s = songs[n] if len(songs) == len(tracks) else None
-            if s is not None and abs(float(s.get("duration") or 0) - (t["duration"] or 0)) <= LEN_OK:
+            if s is not None and len_ok(float(s.get("duration") or 0), t["duration"] or 0):
                 out[t["id"]] = s.get("song_id")
     return out
 
 
-def find_songs(con, rel, rows, want, artist):
-    """Песни downtify для дорожек want и названия тех, что в Spotify не нашлись."""
-    songs, missing = [], []
+def mmss(sec):
+    return "%d:%02d" % (int(sec) // 60, int(sec) % 60)
+
+
+def find_songs(con, rel, rows, want, artist, alt=False):
+    """Песни downtify для дорожек want и то, что в Spotify не нашлось:
+    названия и описания версий другой длины («Making Promises» 2:24 вместо
+    1:57). alt — такие версии брать: человек так решил в пульте."""
+    songs, missing, other = [], [], []
     # весь релиз — одним альбомом: так downtify сохранит номера дорожек
     if len(want) == len(rows) and rel["provider"] == "deezer":
         alb = disco.deezer("album/%s" % rel["provider_id"]) or {}
@@ -216,21 +242,28 @@ def find_songs(con, rel, rows, want, artist):
                 note_track(con, t, ids.get(t["id"]), searched=False)
     if not songs:
         for t in want:
-            sid = (track_by_isrc(t["isrc"], t["duration"]) if t["isrc"] else None) or \
-                track_by_name(artist, t["title"], t["duration"])
-            note_track(con, t, sid)
+            alts = []
+            sid = (track_by_isrc(t["isrc"], t["duration"], alts) if t["isrc"] else None) or \
+                track_by_name(artist, t["title"], t["duration"], alts)
+            if not sid and alt and alts:
+                sid = alts[0]["id"]
+            note_track(con, t, sid, alt=alts[0] if alts else None)
             if not sid:
                 missing.append(t["title"])
+                if alts:
+                    other.append("«%s» %s вместо %s" % (t["title"], mmss(alts[0].get("duration_ms", 0) / 1000.0),
+                                                       mmss(t["duration"] or 0)))
                 continue
             songs.extend(downtify_songs("https://open.spotify.com/track/" + sid))
-    return songs, missing
+    return songs, missing, other
 
 
-def release(con, release_id, artist_name=None, retry=False):
+def release(con, release_id, artist_name=None, retry=False, alt=False):
     """Отправить в downtify то, что в релизе решено скачать. Вернуть отчёт.
 
     retry — повтор после «не скачалось»: качаем только то, что так и не
     доехало до фонотеки, иначе доехавшее легло бы в incoming второй копией.
+    alt — брать и версии Spotify другой длины (кнопка в пульте).
     """
     rel = con.execute("SELECT r.*, a.name AS artist, a.deezer_name FROM releases r "
                       "LEFT JOIN artists a ON a.id = r.artist_id WHERE r.id=?", (release_id,)).fetchone()
@@ -248,12 +281,15 @@ def release(con, release_id, artist_name=None, retry=False):
         return "в релизе нечего качать"
     artist = artist_name or rel["deezer_name"] or rel["artist"] or ""
     try:
-        songs, missing = find_songs(con, rel, rows, want, artist)
+        songs, missing, other = find_songs(con, rel, rows, want, artist, alt)
     except SpotifyUnavailable:
         note_spotify_down(con, want)
         raise
     if not songs:
-        raise RuntimeError("в Spotify не нашлось ни одной дорожки: %s" % ", ".join(missing[:5]))
+        if other and len(other) == len(missing):
+            raise RuntimeError("в Spotify только другая версия: %s" % ", ".join(other[:5]))
+        raise RuntimeError("в Spotify не нашлось ни одной дорожки: %s%s" % (
+            ", ".join(missing[:5]), "; другой длины: %s" % ", ".join(other[:5]) if other else ""))
 
     downtify_batch(songs)
     con.execute("UPDATE releases SET status='downloading', decided_at=?, note=NULL WHERE id=?",

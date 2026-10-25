@@ -243,6 +243,15 @@ def release_get(request, rel_id):
 
 
 @require_POST
+def release_get_alt(request, rel_id):
+    """«Не скачалось», потому что в Spotify только версия другой длины, — взять её."""
+    con = data.jcon()
+    data.enqueue(con, "download", {"release_id": rel_id, "retry": 1, "alt": 1})
+    con.execute("UPDATE releases SET status='queued', decided_at=?, note=NULL WHERE id=?", (jdb.now(), rel_id))
+    return _rel_card(request, con, rel_id, "Скачаю версию из Spotify, хоть длина и другая")
+
+
+@require_POST
 def release_get_all(request):
     """Все ждущие решения — в очередь разом (когда «качать сразу» выключено)."""
     con = data.jcon()
