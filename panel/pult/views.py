@@ -410,6 +410,11 @@ def discography(request):
     ctx["recent"] = con.execute(
         "SELECT a.id, a.name, count(r.id) n FROM artists a JOIN releases r ON r.artist_id=a.id "
         "WHERE r.tracks_total IS NOT NULL GROUP BY a.id ORDER BY max(r.id) DESC LIMIT 8").fetchall()
+    guest = auth.guest_of(request)
+    if guest is not None:
+        today = data.guest_artists_today(con, guest)
+        ctx["quota"] = {"used": len(today), "limit": data.guest_limit(con),
+                        "this": bool(aid and aid.isdigit() and int(aid) in today)}
     return render(request, "pult/discography.html", ctx)
 
 
@@ -469,11 +474,14 @@ def disco_download(request, aid):
     ids = [int(x) for x in request.POST.getlist("rel") if x.isdigit()]
     if not ids:
         return toast(HttpResponse(status=204), "Не выбрано ни одного релиза")
+    # гостю — не больше guest_artists_day исполнителей в день; релизов у
+    # каждого — сколько угодно, повторно тот же исполнитель не засчитывается
     if guest is not None:
-        busy = data.guest_busy(con, guest)
-        if busy + len(ids) > data.GUEST_LIMIT:
-            return toast(HttpResponse(status=204), "В работе уже %d заявок из %d: дождись, пока скачаются"
-                         % (busy, data.GUEST_LIMIT))
+        limit = data.guest_limit(con)
+        today = data.guest_artists_today(con, guest)
+        if aid not in today and len(today) >= limit:
+            return toast(HttpResponse(status=204), "Сегодня уже %d %s из %d — новых можно будет завтра"
+                         % (len(today), _artist_word(len(today)), limit))
     n, titles = 0, []
     for rid in ids:
         rel = con.execute("SELECT id, status, title FROM releases WHERE id=? AND artist_id=?", (rid, aid)).fetchone()
@@ -496,9 +504,20 @@ def disco_download(request, aid):
         a = con.execute("SELECT coalesce(deezer_name, name) FROM artists WHERE id=?", (aid,)).fetchone()
         data.notify("beets: %s скачивает %s — %s%s" % (
             guest, a[0] if a else "?", ", ".join(titles[:5]), " и ещё %d" % (len(titles) - 5) if len(titles) > 5 else ""))
-    resp = toast(HttpResponse(""), "В очередь на скачивание: %d %s" % (n, "релиз" if n == 1 else "релиза" if n < 5 else "релизов"))
+    resp = toast(HttpResponse(""), "В очередь на скачивание: %d %s" % (n, _plural(n, "релиз", "релиза", "релизов")))
     resp["HX-Redirect"] = "/requests/" if guest is not None else "/releases/?f=work"
     return resp
+
+
+def _plural(n, one, few, many):
+    n = abs(n) % 100
+    if 11 <= n <= 14:
+        return many
+    return one if n % 10 == 1 else few if 2 <= n % 10 <= 4 else many
+
+
+def _artist_word(n):
+    return _plural(n, "исполнитель", "исполнителя", "исполнителей")
 
 
 # ---------------------------------------------------------------- гости
@@ -515,7 +534,7 @@ def _guests(request, con, text=None, reveal=None):
 
 def guests_view(request):
     con = data.jcon()
-    return render(request, "pult/guests.html", {"guests": data.guests_list(con), "limit": data.GUEST_LIMIT,
+    return render(request, "pult/guests.html", {"guests": data.guests_list(con), "limit": data.guest_limit(con),
                                                 "login_url": _login_url(request)})
 
 
@@ -562,8 +581,8 @@ def requests_view(request):
     con = data.jcon()
     guest = auth.guest_of(request)
     only = guest or request.GET.get("guest") or None
-    return render(request, "pult/requests.html", {"reqs": data.requests_list(con, only), "limit": data.GUEST_LIMIT,
-                                                  "busy": data.guest_busy(con, guest) if guest else None,
+    return render(request, "pult/requests.html", {"reqs": data.requests_list(con, only), "limit": data.guest_limit(con),
+                                                  "today": len(data.guest_artists_today(con, guest)) if guest else None,
                                                   "only": None if guest else only})
 
 
@@ -667,6 +686,7 @@ SETTINGS = {
     "ref_ok": (PCT, 60, 99), "ref_bad": (PCT, 30, 90),
     "dupes_days": (int, 1, 90), "junk_days": (int, 1, 30), "verify_limit": (int, 0, 5000),
     "follow_min_tracks": (int, 1, 200), "follow_new_days": (int, 7, 365), "censor_limit": (int, 0, 2000),
+    "guest_artists_day": (int, 1, 100),
 }
 
 

@@ -508,7 +508,17 @@ def releases(con, f=None):
 
 
 # ---------------------------------------------------------------- заявки гостей
-GUEST_LIMIT = 20          # релизов в работе у одного гостя разом
+def guest_limit(con):
+    """Исполнителей в день у одного гостя; меняется на странице «Гости»."""
+    return int(float(jdb.setting(con, "guest_artists_day")))
+
+
+def guest_artists_today(con, guest):
+    """Чьи дискографии гость уже качал сегодня (с полуночи по времени сервера)."""
+    today = datetime.date.today().isoformat()
+    return {r[0] for r in con.execute(
+        "SELECT DISTINCT r.artist_id FROM requests q JOIN releases r ON r.id=q.release_id "
+        "WHERE q.guest=? AND q.created_at >= ?", (guest, today))}
 
 
 def guest_busy(con, guest):
@@ -531,7 +541,8 @@ def guests_list(con):
         "SELECT g.*, (SELECT count(*) FROM requests q WHERE q.guest=g.name) AS total, "
         "(SELECT max(created_at) FROM requests q WHERE q.guest=g.name) AS last_request "
         "FROM guests g ORDER BY g.disabled, g.name COLLATE NOCASE").fetchall()
-    return [{"row": g, "busy": guest_busy(con, g["name"])} for g in rows]
+    return [{"row": g, "busy": guest_busy(con, g["name"]), "today": len(guest_artists_today(con, g["name"]))}
+            for g in rows]
 
 
 def guest_get(con, name):

@@ -457,6 +457,7 @@ DEFAULTS = {
     "censor_enabled": "1",
     "censor_auto": "1",
     "censor_limit": "300",
+    "guest_artists_day": "10",  # исполнителей в день у гостя пульта; релизов у каждого — сколько угодно
     "nightly_hour": "5",
     "interval": "300",
 }

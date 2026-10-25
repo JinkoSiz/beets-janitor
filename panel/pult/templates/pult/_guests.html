@@ -12,13 +12,14 @@
   {% if guests %}
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Гость</th><th>Заведён</th><th>Последний вход</th><th>Заявки</th><th></th></tr></thead>
+      <thead><tr><th>Гость</th><th>Заведён</th><th>Последний вход</th><th>Сегодня</th><th>Заявки</th><th></th></tr></thead>
       <tbody>
         {% for x in guests %}{% with g=x.row %}
         <tr>
           <td><b>{{ g.name }}</b>{% if g.disabled %} <span class="pill">отключён</span>{% endif %}</td>
           <td class="mono">{{ g.created_at|when }}</td>
           <td class="mono">{% if g.last_login %}{{ g.last_login|when }}{% else %}<span class="muted">ещё не входил</span>{% endif %}</td>
+          <td class="num">{% if x.today %}{{ x.today }} {{ x.today|plural:"исполнитель,исполнителя,исполнителей" }}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td>{% if g.total %}<a href="/requests/?guest={{ g.name|urlencode }}">{{ g.total }}</a>{% if x.busy %} <span class="pill info">в работе {{ x.busy }}</span>{% endif %}{% if g.last_request %}<span class="sub">последняя {{ g.last_request|when }}</span>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td><span class="row" style="justify-content:flex-end">
             <button class="btn sm" hx-post="/guests/reset" hx-vals='{"name": "{{ g.name|escapejs }}"}' hx-target="#guests" hx-swap="outerHTML" hx-confirm="Выдать {{ g.name }} новый пароль? Старый сразу перестанет подходить.">Новый пароль</button>

@@ -61,6 +61,7 @@ import env  # noqa: E402
 API = "https://api.deezer.com/"
 PAUSE = 0.15            # у Deezer потолок 50 запросов за 5 секунд
 LEN_SAME = 3            # секунд: одна и та же запись на разных релизах
+ISRC_SPLIT = re.compile(r"[;,/\s]+")   # в теге бывает несколько ISRC подряд
 TYPE_ORDER = {"album": 0, "ep": 1, "single": 2, "compile": 3}
 
 # Пометки версии. Ремастер сюда не входит нарочно: это та же запись, и её
@@ -208,8 +209,12 @@ class Library:
         # у дорожек, найденных в Spotify, beets пишет в mb_trackid id трека Spotify
         self.by_track_id = {}
         for it in self.items:
-            if it["isrc"]:
-                self.by_isrc.setdefault(it["isrc"], it)
+            # из MusicBrainz beets пишет все ISRC записи через «;»
+            # («GBAMC8400002;USEV18400001» у «Am I Evil?»): каждый — отдельный
+            # ключ, иначе трек из фонотеки не узнавался и качался второй раз
+            for code in ISRC_SPLIT.split(it["isrc"]):
+                if code:
+                    self.by_isrc.setdefault(code, it)
             if it["track_id"]:
                 self.by_track_id.setdefault(it["track_id"], it)
         self._by_title = None

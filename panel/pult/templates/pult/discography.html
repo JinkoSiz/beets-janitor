@@ -67,7 +67,7 @@
         </tbody>
       </table>
     </div>
-    <div class="actions"><button class="btn primary" type="submit">Скачать выбранное <span class="htmx-indicator spin"></span></button><span class="muted" style="font-size:12.5px;align-self:center">уйдёт в downtify; после импорта каждый трек сверится с превью</span></div>
+    <div class="actions"><button class="btn primary" type="submit"{% if quota and not quota.this and quota.used >= quota.limit %} disabled{% endif %}>Скачать выбранное <span class="htmx-indicator spin"></span></button><span class="muted" style="font-size:12.5px;align-self:center">{% if quota %}{% if quota.this %}этот исполнитель сегодня уже засчитан — качай сколько нужно{% elif quota.used >= quota.limit %}сегодня уже {{ quota.used }} из {{ quota.limit }} исполнителей — новых можно будет завтра{% else %}засчитается как {{ quota.used|add:1 }}-й исполнитель из {{ quota.limit }} на сегодня; релизов — сколько угодно{% endif %}{% else %}уйдёт в downtify; после импорта каждый трек сверится с превью{% endif %}</span></div>
     {% else %}
     <div class="hint"><b>Качать нечего</b> — всё, что есть в дискографии, у тебя уже лежит{% if t.version and not d.flags.versions %} (кроме других версий: их можно включить переключателем выше){% endif %}.</div>
     {% endif %}
