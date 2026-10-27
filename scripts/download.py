@@ -27,10 +27,6 @@ downtify качает только по ссылке на трек Spotify (ил
 сам: «Скажи мне кто ты» он заменил на «Скажи Мне Кто Ты 2», на 21 секунду
 короче (2026-10-27). Если трека нет в Spotify вовсе, такое видео — запасной
 источник: дорожка уходит с тегами Deezer.
-
-Нет и на YouTube Music — остаётся Soulseek. downtify ищет там сам (slskd),
-если он у него включён и стоит в audio_providers первым; тогда дорожка
-уходит в downtify с одними тегами Deezer (soulseek_on, deezer_song).
 """
 import json
 import os
@@ -249,7 +245,7 @@ def pin_youtube(songs):
     """Песням Spotify — проверенное видео YouTube Music, если оно нашлось.
     Не нашлось — downtify ищет сам, как раньше."""
     for s in songs:
-        if s.get("youtube_id") or s.get("source") != "spotify":
+        if s.get("youtube_id") or s.get("source") == "youtube":
             continue
         yt = youtube_match(s.get("artists") or [s.get("artist")], s.get("name"), s.get("duration"))
         if yt:
@@ -259,45 +255,19 @@ def pin_youtube(songs):
 def youtube_song(rel, t, artist, yt):
     """Песня downtify для дорожки, которой нет в Spotify: звук — найденное
     видео, теги — Deezer."""
-    song = dict(yt)
-    song.update(deezer_tags(rel, t, artist))
-    song["youtube_id"] = yt["song_id"]
-    return song
-
-
-def deezer_tags(rel, t, artist):
     info = jdb.loads(t["info"], {}) or {}
     who = info.get("artist") or artist
-    tags = {"name": t["title"], "artists": [who], "artist": who, "album_name": rel["title"],
-            "duration": t["duration"], "release_date": rel["release_date"] or "",
-            "year": (rel["release_date"] or "")[:4]}
+    song = dict(yt)
+    song.update({"youtube_id": yt["song_id"], "name": t["title"], "artists": [who], "artist": who,
+                 "album_name": rel["title"], "duration": t["duration"],
+                 "release_date": rel["release_date"] or "", "year": (rel["release_date"] or "")[:4]})
     if rel["cover"]:
-        tags["cover_url"] = rel["cover"].replace("/250x250-", "/1000x1000-")
-    return tags
-
-
-# ---------------------------------------------------------------- Soulseek
-def soulseek_on():
-    """Ищет ли downtify звук в Soulseek раньше, чем на YouTube Music. Только
-    тогда есть смысл отдавать ему дорожку без Spotify и без видео: иначе он
-    возьмёт первое похожее с YouTube."""
-    try:
-        s = requests.get(env.DOWNTIFY_URL + "/api/settings", timeout=30).json()
-    except (requests.exceptions.RequestException, ValueError):
-        return False
-    providers = s.get("audio_providers") or []
-    return bool((s.get("slskd") or {}).get("enabled")) and providers[:1] == ["slskd"]
-
-
-def deezer_song(rel, t, artist):
-    """Песня downtify только с тегами Deezer: звук он ищет сам, в Soulseek."""
-    song = deezer_tags(rel, t, artist)
-    song.update({"song_id": "deezer-%s" % t["provider_id"], "source": "deezer"})
+        song["cover_url"] = rel["cover"].replace("/250x250-", "/1000x1000-")
     return song
 
 
 # ---------------------------------------------------------------- релиз
-def note_track(con, t, sid, searched=True, alt=None, yt=None, slsk=None):
+def note_track(con, t, sid, searched=True, alt=None, yt=None):
     """Запомнить у дорожки, под каким id Spotify она ушла в downtify.
 
     По этому id follow.py узнает её в фонотеке: название и имя исполнителя в
@@ -305,8 +275,7 @@ def note_track(con, t, sid, searched=True, alt=None, yt=None, slsk=None):
     Spotify её нет; ключа нет вовсе — ушла с альбомом, id не сопоставился.
     spotify_alt — в Spotify есть только версия другой длины: по ней в пульте
     кнопка «Взять версию Spotify». youtube_id — в Spotify её нет, ушла видео
-    YouTube Music: под этим id её знает очередь downtify. downtify_id — нет
-    и на YouTube Music, ушла искаться в Soulseek под этим id.
+    YouTube Music: под этим id её знает очередь downtify.
     """
     info = jdb.loads(t["info"], {})
     if sid or searched:
@@ -321,10 +290,6 @@ def note_track(con, t, sid, searched=True, alt=None, yt=None, slsk=None):
         info["youtube_id"] = yt["song_id"]
     else:
         info.pop("youtube_id", None)
-    if slsk:
-        info["downtify_id"] = slsk["song_id"]
-    else:
-        info.pop("downtify_id", None)
     # сбой прошлой попытки (follow.py) к новой отношения не имеет
     info.pop("fetch_error", None)
     con.execute("UPDATE release_tracks SET info=? WHERE id=?", (json.dumps(info, ensure_ascii=False), t["id"]))
@@ -403,11 +368,9 @@ def orphans(con, rel, rows):
 def find_songs(con, rel, rows, want, artist, alt=False):
     """Песни downtify для дорожек want, то, что в Spotify не нашлось
     (названия и описания версий другой длины: «Making Promises» 2:24 вместо
-    1:57), и что из ненайденного взято с YouTube Music или отдано искать в
-    Soulseek. alt — версии другой длины брать, если на YouTube Music нет
-    точной: человек так решил в пульте."""
-    songs, missing, other, youtube, soulseek = [], [], [], [], []
-    slsk_on = None
+    1:57), и что из ненайденного взято с YouTube Music. alt — версии другой
+    длины брать, если на YouTube Music нет точной: человек так решил в пульте."""
+    songs, missing, other, youtube = [], [], [], []
     rest = want
     # альбом Spotify по UPC релиза: дорожки придут с его названием и номерами.
     # Раньше так качался только релиз целиком, а часть — поиском по ISRC, и он
@@ -439,20 +402,10 @@ def find_songs(con, rel, rows, want, artist, alt=False):
                 yt = youtube_match([artist, info.get("artist")], t["title"], t["duration"])
             if not sid and not yt and alt and alts:
                 sid = alts[0]["id"]
-            slsk = None
-            if not sid and not yt:
-                if slsk_on is None:
-                    slsk_on = soulseek_on()
-                if slsk_on:
-                    slsk = deezer_song(rel, t, artist)
-            note_track(con, t, sid, alt=alts[0] if alts else None, yt=yt, slsk=slsk)
+            note_track(con, t, sid, alt=alts[0] if alts else None, yt=yt)
             if yt:
                 songs.append(youtube_song(rel, t, artist, yt))
                 youtube.append(t["title"])
-                continue
-            if slsk:
-                songs.append(slsk)
-                soulseek.append(t["title"])
                 continue
             if not sid:
                 missing.append(t["title"])
@@ -462,7 +415,7 @@ def find_songs(con, rel, rows, want, artist, alt=False):
                 continue
             songs.extend(downtify_songs("https://open.spotify.com/track/" + sid))
     pin_youtube(songs)
-    return songs, missing, other, youtube, soulseek
+    return songs, missing, other, youtube
 
 
 def release(con, release_id, artist_name=None, retry=False, alt=False):
@@ -488,7 +441,7 @@ def release(con, release_id, artist_name=None, retry=False, alt=False):
         return "в релизе нечего качать"
     artist = artist_name or rel["deezer_name"] or rel["artist"] or ""
     try:
-        songs, missing, other, youtube, soulseek = find_songs(con, rel, rows, want, artist, alt)
+        songs, missing, other, youtube = find_songs(con, rel, rows, want, artist, alt)
     except SpotifyUnavailable:
         note_spotify_down(con, want)
         raise
@@ -503,12 +456,10 @@ def release(con, release_id, artist_name=None, retry=False, alt=False):
                 (jdb.now(), release_id))
     jdb.log_event(con, "download", "queue", None,
                   {"release": rel["title"], "artist": artist, "tracks": len(songs), "missing": missing,
-                   "youtube": youtube, "soulseek": soulseek})
+                   "youtube": youtube})
     msg = "в очередь downtify: %d дорожек «%s»" % (len(songs), rel["title"])
     if youtube:
         msg += "; нет в Spotify, взято с YouTube Music: %s" % ", ".join(youtube[:5])
-    if soulseek:
-        msg += "; нет ни в Spotify, ни на YouTube Music, ищется в Soulseek: %s" % ", ".join(soulseek[:5])
     if missing:
         msg += "; в Spotify не нашлось: %s" % ", ".join(missing[:5])
     return msg
