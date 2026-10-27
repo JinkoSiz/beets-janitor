@@ -20,9 +20,17 @@ downtify качает только по ссылке на трек Spotify (ил
 
 Поиск в самом downtify для этого не годится: он ищет на YouTube Music и на
 запрос по ISRC отвечает посторонними песнями.
+
+Поэтому видео YouTube Music ищем сами, по имени, и берём, только если
+сошлись исполнитель, название и длина (youtube_match). Найденное видео
+передаём downtify в youtube_id — тогда он качает его, а не то, что выберет
+сам: «Скажи мне кто ты» он заменил на «Скажи Мне Кто Ты 2», на 21 секунду
+короче (2026-10-27). Если трека нет в Spotify вовсе, такое видео — запасной
+источник: дорожка уходит с тегами Deezer.
 """
 import json
 import os
+import re
 import sys
 import time
 
@@ -167,25 +175,121 @@ def downtify_batch(songs):
     return r.json()
 
 
+# ---------------------------------------------------------------- YouTube Music
+# слова, которыми помечают другую запись той же песни: «Воскрешение» и
+# «Воскрешение (Space Club Mix)» у ППК различаются длиной на 4 секунды
+VERSION_WORD = re.compile(r"\b(mix|remix|edit|version|rework|bootleg|dub|vip|live|instrumental|acoustic|"
+                          r"sped|slowed|intro|outro|interlude|reprise|skit|ремикс|версия|микс|лайв|"
+                          r"инструментал|акустик|интро|аутро|скит)\b", re.I)
+
+
+def versions(title):
+    """Пометки версии из скобок и хвоста « - …»: {"space club mix"}."""
+    s = str(title or "")
+    tail = disco.DASH_TAIL.search(s)
+    parts = re.findall(r"[\(\[](.*?)[\)\]]", s) + ([tail.group(0)] if tail else [])
+    return {disco.norm_name(p) for p in parts if VERSION_WORD.search(p)}
+
+
+def _star_norm(s):
+    s = str(s or "").lower().replace("ё", "е")
+    s = re.sub(r"[\(\[].*?[\)\]]", " ", s)
+    return re.sub(r"[^a-zа-я0-9*]+", " ", s).strip()
+
+
+def same_title(a, b):
+    """Одно и то же название. Звёздочки цензуры («НЕ **ЛАНЬ», «си**ки») —
+    любые буквы: на YouTube Music название бывает и заглушенным, и полным."""
+    if versions(a) != versions(b):
+        return False
+    if disco.title_keys(a) & disco.title_keys(b):
+        return True
+    for x, y in ((a, b), (b, a)):
+        x = _star_norm(x)
+        if "*" in x:
+            pat = "[a-zа-я0-9]*".join(re.escape(p) for p in re.split(r"\*+", x))
+            if re.fullmatch(pat, _star_norm(y).replace("*", "")):
+                return True
+    return False
+
+
+def youtube_match(artists, title, duration):
+    """Видео YouTube Music с этой песней: исполнитель, название и длина
+    сходятся. None — такого нет или downtify не ответил. Без длины подмену
+    не отличить, поэтому и не ищем."""
+    names = set()
+    for a in artists:
+        for n in disco.artist_names(a):
+            names |= disco.name_keys(n)
+    main = next((a for a in artists if a), "")
+    if not duration or not names or not title:
+        return None
+    for q in ("%s %s" % (main, title), "%s %s" % (title, main)):
+        try:
+            r = requests.get(env.DOWNTIFY_URL + "/api/songs/search", params={"query": q}, timeout=120)
+            r.raise_for_status()
+            found = r.json()
+        except (requests.exceptions.RequestException, ValueError):
+            return None
+        for s in found if isinstance(found, list) else []:
+            if s.get("source") != "youtube" or not s.get("song_id"):
+                continue
+            if not any(disco.name_keys(n) & names for a in s.get("artists") or [] for n in disco.artist_names(a)):
+                continue
+            if same_title(title, s.get("name")) and len_ok(float(s.get("duration") or 0), duration):
+                return s
+    return None
+
+
+def pin_youtube(songs):
+    """Песням Spotify — проверенное видео YouTube Music, если оно нашлось.
+    Не нашлось — downtify ищет сам, как раньше."""
+    for s in songs:
+        if s.get("youtube_id") or s.get("source") == "youtube":
+            continue
+        yt = youtube_match(s.get("artists") or [s.get("artist")], s.get("name"), s.get("duration"))
+        if yt:
+            s["youtube_id"] = yt["song_id"]
+
+
+def youtube_song(rel, t, artist, yt):
+    """Песня downtify для дорожки, которой нет в Spotify: звук — найденное
+    видео, теги — Deezer."""
+    info = jdb.loads(t["info"], {}) or {}
+    who = info.get("artist") or artist
+    song = dict(yt)
+    song.update({"youtube_id": yt["song_id"], "name": t["title"], "artists": [who], "artist": who,
+                 "album_name": rel["title"], "duration": t["duration"],
+                 "release_date": rel["release_date"] or "", "year": (rel["release_date"] or "")[:4]})
+    if rel["cover"]:
+        song["cover_url"] = rel["cover"].replace("/250x250-", "/1000x1000-")
+    return song
+
+
 # ---------------------------------------------------------------- релиз
-def note_track(con, t, sid, searched=True, alt=None):
+def note_track(con, t, sid, searched=True, alt=None, yt=None):
     """Запомнить у дорожки, под каким id Spotify она ушла в downtify.
 
     По этому id follow.py узнает её в фонотеке: название и имя исполнителя в
     Spotify бывают другими, чем в Deezer. spotify_id = None — искали, но в
     Spotify её нет; ключа нет вовсе — ушла с альбомом, id не сопоставился.
     spotify_alt — в Spotify есть только версия другой длины: по ней в пульте
-    кнопка «Взять версию Spotify».
+    кнопка «Взять версию Spotify». youtube_id — в Spotify её нет, ушла видео
+    YouTube Music: под этим id её знает очередь downtify.
     """
     info = jdb.loads(t["info"], {})
     if sid or searched:
         info["spotify_id"] = sid
     else:
         info.pop("spotify_id", None)
-    if alt and not sid:
+    if alt and not sid and not yt:
         info["spotify_alt"] = {"id": alt["id"], "length": round(alt.get("duration_ms", 0) / 1000.0)}
     else:
         info.pop("spotify_alt", None)
+    if yt:
+        info["youtube_id"] = yt["song_id"]
+    else:
+        info.pop("youtube_id", None)
     # сбой прошлой попытки (follow.py) к новой отношения не имеет
     info.pop("fetch_error", None)
     con.execute("UPDATE release_tracks SET info=? WHERE id=?", (json.dumps(info, ensure_ascii=False), t["id"]))
@@ -262,10 +366,11 @@ def orphans(con, rel, rows):
 
 
 def find_songs(con, rel, rows, want, artist, alt=False):
-    """Песни downtify для дорожек want и то, что в Spotify не нашлось:
-    названия и описания версий другой длины («Making Promises» 2:24 вместо
-    1:57). alt — такие версии брать: человек так решил в пульте."""
-    songs, missing, other = [], [], []
+    """Песни downtify для дорожек want, то, что в Spotify не нашлось
+    (названия и описания версий другой длины: «Making Promises» 2:24 вместо
+    1:57), и что из ненайденного взято с YouTube Music. alt — версии другой
+    длины брать, если на YouTube Music нет точной: человек так решил в пульте."""
+    songs, missing, other, youtube = [], [], [], []
     rest = want
     # альбом Spotify по UPC релиза: дорожки придут с его названием и номерами.
     # Раньше так качался только релиз целиком, а часть — поиском по ISRC, и он
@@ -290,9 +395,18 @@ def find_songs(con, rel, rows, want, artist, alt=False):
             alts = []
             sid = (track_by_isrc(t["isrc"], t["duration"], alts) if t["isrc"] else None) or \
                 track_by_name(artist, t["title"], t["duration"], alts)
-            if not sid and alt and alts:
+            yt = None
+            if not sid:
+                # в Spotify такой записи нет — запасной источник: YouTube Music
+                info = jdb.loads(t["info"], {}) or {}
+                yt = youtube_match([artist, info.get("artist")], t["title"], t["duration"])
+            if not sid and not yt and alt and alts:
                 sid = alts[0]["id"]
-            note_track(con, t, sid, alt=alts[0] if alts else None)
+            note_track(con, t, sid, alt=alts[0] if alts else None, yt=yt)
+            if yt:
+                songs.append(youtube_song(rel, t, artist, yt))
+                youtube.append(t["title"])
+                continue
             if not sid:
                 missing.append(t["title"])
                 if alts:
@@ -300,7 +414,8 @@ def find_songs(con, rel, rows, want, artist, alt=False):
                                                        mmss(t["duration"] or 0)))
                 continue
             songs.extend(downtify_songs("https://open.spotify.com/track/" + sid))
-    return songs, missing, other
+    pin_youtube(songs)
+    return songs, missing, other, youtube
 
 
 def release(con, release_id, artist_name=None, retry=False, alt=False):
@@ -326,7 +441,7 @@ def release(con, release_id, artist_name=None, retry=False, alt=False):
         return "в релизе нечего качать"
     artist = artist_name or rel["deezer_name"] or rel["artist"] or ""
     try:
-        songs, missing, other = find_songs(con, rel, rows, want, artist, alt)
+        songs, missing, other, youtube = find_songs(con, rel, rows, want, artist, alt)
     except SpotifyUnavailable:
         note_spotify_down(con, want)
         raise
@@ -340,8 +455,11 @@ def release(con, release_id, artist_name=None, retry=False, alt=False):
     con.execute("UPDATE releases SET status='downloading', decided_at=?, note=NULL WHERE id=?",
                 (jdb.now(), release_id))
     jdb.log_event(con, "download", "queue", None,
-                  {"release": rel["title"], "artist": artist, "tracks": len(songs), "missing": missing})
+                  {"release": rel["title"], "artist": artist, "tracks": len(songs), "missing": missing,
+                   "youtube": youtube})
     msg = "в очередь downtify: %d дорожек «%s»" % (len(songs), rel["title"])
+    if youtube:
+        msg += "; нет в Spotify, взято с YouTube Music: %s" % ", ".join(youtube[:5])
     if missing:
         msg += "; в Spotify не нашлось: %s" % ", ".join(missing[:5])
     return msg
