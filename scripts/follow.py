@@ -261,10 +261,11 @@ def not_arrived(lib, rel, tracks):
 
 
 def not_in_spotify(t):
-    """Дорожку искали в Spotify и не нашли, и на YouTube Music тоже:
-    downtify её не качал и не скачает."""
+    """Дорожку искали в Spotify и не нашли, и на YouTube Music тоже, а в
+    Soulseek не отдавали: downtify её не качал и не скачает."""
     info = jdb.loads(t["info"], {}) or {}
-    return "spotify_id" in info and not info["spotify_id"] and not info.get("youtube_id")
+    return "spotify_id" in info and not info["spotify_id"] and not info.get("youtube_id") \
+        and not info.get("downtify_id")
 
 
 def titles(tracks):
@@ -384,7 +385,7 @@ def recheck_downloads(con, lib):
         broken = {}
         for t in rest:
             info = jdb.loads(t["info"], {}) or {}
-            st = queue.get(info.get("spotify_id") or info.get("youtube_id") or "")
+            st = queue.get(info.get("spotify_id") or info.get("youtube_id") or info.get("downtify_id") or "")
             if st and st[0] == "error":
                 broken[t["id"]] = fetch_error(st[1])
         lost = [t for t in rest if not_in_spotify(t)]
