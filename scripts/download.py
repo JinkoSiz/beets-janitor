@@ -569,7 +569,10 @@ def release(con, release_id, artist_name=None, retry=False, alt=False):
     jdb.log_event(con, "download", "queue", None,
                   {"release": rel["title"], "artist": artist, "tracks": len(songs), "missing": missing,
                    "youtube": youtube, "soundcloud": fetched})
-    msg = "в очередь downtify: %d дорожек «%s»" % (len(songs), rel["title"])
+    if songs:
+        msg = "в очередь downtify: %d дорожек «%s»" % (len(songs), rel["title"])
+    else:
+        msg = "«%s»" % rel["title"]
     if youtube:
         msg += "; нет в Spotify, взято с YouTube Music: %s" % ", ".join(youtube[:5])
     if fetched:
