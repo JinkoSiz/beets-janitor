@@ -30,7 +30,8 @@ downtify качает только по ссылке на трек Spotify (ил
 
 Нет и там — ищем на SoundCloud (soundcloud_match) с той же сверкой: туда
 русские рэперы выкладывают треки сами, «Стих между нами» xxxmanera нашёлся
-только там (2026-10-28). downtify с SoundCloud не качает, поэтому файл
+только там (2026-10-28). Туда же — трек из Spotify, которому нет точного
+видео: иначе downtify ищет его сам. downtify с SoundCloud не качает, поэтому файл
 скачиваем сами и кладём в incoming с тегами Deezer, а импортирует его
 сторож обычным порядком.
 """
@@ -256,13 +257,17 @@ def youtube_match(artists, title, duration):
 
 def pin_youtube(songs):
     """Песням Spotify — проверенное видео YouTube Music, если оно нашлось.
-    Не нашлось — downtify ищет сам, как раньше."""
+    Вернуть песни, которым не нашлось: их downtify ищет сам."""
+    left = []
     for s in songs:
         if s.get("youtube_id") or s.get("source") == "youtube":
             continue
         yt = youtube_match(s.get("artists") or [s.get("artist")], s.get("name"), s.get("duration"))
         if yt:
             s["youtube_id"] = yt["song_id"]
+        else:
+            left.append(s)
+    return left
 
 
 def youtube_song(rel, t, artist, yt):
@@ -321,8 +326,10 @@ def soundcloud_match(artists, title, duration):
     return other
 
 
-def soundcloud_fetch(rel, t, artist, sc):
-    """Скачать загрузку SoundCloud в incoming с тегами Deezer. Вернуть путь."""
+def soundcloud_fetch(rel, t, artist, sc, song=None):
+    """Скачать загрузку SoundCloud в incoming с тегами Deezer, а если трек
+    есть в Spotify (song) — с его тегами, как у соседей по альбому из
+    downtify. Вернуть путь."""
     import uncensor
     from mediafile import Image, ImageType, MediaFile
     info = jdb.loads(t["info"], {}) or {}
@@ -336,6 +343,11 @@ def soundcloud_fetch(rel, t, artist, sc):
         if not len_ok(f.length or 0, t["duration"] or 0):
             raise RuntimeError("SoundCloud отдал %s вместо %s" % (mmss(f.length or 0), mmss(t["duration"] or 0)))
         f.title, f.artist, f.albumartist, f.album = t["title"], who, who, rel["title"]
+        if song:
+            f.title = song.get("name") or f.title
+            f.artist = ", ".join(song.get("artists") or []) or f.artist
+            f.album = song.get("album_name") or f.album
+            f.track, f.tracktotal = song.get("track_number"), song.get("album_track_total")
         year = (rel["release_date"] or "")[:4]
         if year.isdigit():
             f.year = int(year)
@@ -461,10 +473,12 @@ def orphans(con, rel, rows):
 def find_songs(con, rel, rows, want, artist, alt=False):
     """Песни downtify для дорожек want, то, что в Spotify не нашлось
     (названия и описания версий другой длины: «Making Promises» 2:24 вместо
-    1:57), что из ненайденного взято с YouTube Music и что — дорожки с
-    загрузкой SoundCloud — качать самим. alt — версии другой длины брать,
-    если точной нет ни там, ни там: человек так решил в пульте."""
+    1:57), что из ненайденного взято с YouTube Music и что качать самим с
+    SoundCloud: (дорожка, загрузка, песня Spotify или None). alt — версии
+    другой длины брать, если точной нет ни там, ни там: человек так решил в
+    пульте."""
     songs, missing, other, youtube, cloud = [], [], [], [], []
+    by_song = {}        # id песни Spotify -> дорожка релиза
     rest = want
     # альбом Spotify по UPC релиза: дорожки придут с его названием и номерами.
     # Раньше так качался только релиз целиком, а часть — поиском по ISRC, и он
@@ -481,6 +495,8 @@ def find_songs(con, rel, rows, want, artist, alt=False):
             songs = album if whole else [s for s in album if s.get("song_id") in take]
             for t in want:
                 note_track(con, t, ids.get(t["id"]), searched=False)
+                if ids.get(t["id"]):
+                    by_song[ids[t["id"]]] = t
             # весь релиз — альбомом целиком, как раньше; из части — по одной
             # только то, что в альбоме Spotify не сопоставилось
             rest = [] if whole else [t for t in want if not ids.get(t["id"])]
@@ -505,7 +521,7 @@ def find_songs(con, rel, rows, want, artist, alt=False):
                 youtube.append(t["title"])
                 continue
             if sc:
-                cloud.append((t, sc))
+                cloud.append((t, sc, None))
                 continue
             if not sid:
                 missing.append(t["title"])
@@ -513,8 +529,25 @@ def find_songs(con, rel, rows, want, artist, alt=False):
                     other.append("«%s» %s вместо %s" % (t["title"], mmss(alts[0].get("duration_ms", 0) / 1000.0),
                                                        mmss(t["duration"] or 0)))
                 continue
-            songs.extend(downtify_songs("https://open.spotify.com/track/" + sid))
-    pin_youtube(songs)
+            got = downtify_songs("https://open.spotify.com/track/" + sid)
+            for s in got:
+                by_song[s.get("song_id")] = t
+            songs.extend(got)
+    # в Spotify трек есть, а точного видео на YouTube Music нет — тогда
+    # downtify ищет сам и находит не то или ничего: «Скажи мне кто ты» он
+    # заменил второй частью, для «Стих между нами» не нашёл ничего, а на
+    # SoundCloud обе лежат у самого xxxmanera (2026-10-28)
+    for s in pin_youtube(songs):
+        t = by_song.get(s.get("song_id"))
+        if t is None:
+            continue
+        info = jdb.loads(t["info"], {}) or {}
+        sc = soundcloud_match([artist, info.get("artist")] + list(s.get("artists") or []), t["title"], t["duration"])
+        if sc:
+            songs.remove(s)
+            # spotify_id снят: в очереди downtify под ним может висеть прежняя ошибка
+            note_track(con, t, None, sc=sc)
+            cloud.append((t, sc, s))
     return songs, missing, other, youtube, cloud
 
 
@@ -551,17 +584,22 @@ def release(con, release_id, artist_name=None, retry=False, alt=False):
         raise RuntimeError("в Spotify не нашлось ни одной дорожки: %s%s" % (
             ", ".join(missing[:5]), "; другой длины: %s" % ", ".join(other[:5]) if other else ""))
 
-    if songs:
-        downtify_batch(songs)
     fetched, failed = [], []
-    for t, sc in cloud:
+    for t, sc, song in cloud:
         try:
-            soundcloud_fetch(rel, t, artist, sc)
+            soundcloud_fetch(rel, t, artist, sc, song)
             fetched.append(t["title"])
         except Exception as e:
-            # не скачалась — для follow.py это «нигде не нашлось», как и было
-            note_track(con, t, None)
+            if song:
+                # есть в Spotify — пусть ищет downtify, как раньше
+                note_track(con, t, song.get("song_id"))
+                songs.append(song)
+            else:
+                # для follow.py это «нигде не нашлось», как и было
+                note_track(con, t, None)
             failed.append("«%s» (%s)" % (t["title"], str(e)[:80]))
+    if songs:
+        downtify_batch(songs)
     if not songs and not fetched:
         raise RuntimeError("с SoundCloud не скачалось: %s" % ", ".join(failed[:5]))
     con.execute("UPDATE releases SET status='downloading', decided_at=?, note=NULL WHERE id=?",
@@ -576,7 +614,7 @@ def release(con, release_id, artist_name=None, retry=False, alt=False):
     if youtube:
         msg += "; нет в Spotify, взято с YouTube Music: %s" % ", ".join(youtube[:5])
     if fetched:
-        msg += "; нет в Spotify и на YouTube Music, скачано с SoundCloud: %s" % ", ".join(fetched[:5])
+        msg += "; нет на YouTube Music, скачано с SoundCloud: %s" % ", ".join(fetched[:5])
     if failed:
         msg += "; с SoundCloud не скачалось: %s" % ", ".join(failed[:5])
     if missing:
