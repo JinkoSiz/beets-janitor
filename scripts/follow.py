@@ -261,10 +261,11 @@ def not_arrived(lib, rel, tracks):
 
 
 def not_in_spotify(t):
-    """Дорожку искали в Spotify и не нашли, и на YouTube Music тоже:
-    downtify её не качал и не скачает."""
+    """Дорожку искали в Spotify и не нашли, и на YouTube Music с SoundCloud
+    тоже: её не качали и не скачают."""
     info = jdb.loads(t["info"], {}) or {}
-    return "spotify_id" in info and not info["spotify_id"] and not info.get("youtube_id")
+    return "spotify_id" in info and not info["spotify_id"] and not info.get("youtube_id") \
+        and not info.get("soundcloud")
 
 
 def titles(tracks):
