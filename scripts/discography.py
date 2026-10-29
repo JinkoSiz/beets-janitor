@@ -67,10 +67,15 @@ TYPE_ORDER = {"album": 0, "ep": 1, "single": 2, "compile": 3}
 # Пометки версии. Ремастер сюда не входит нарочно: это та же запись, и её
 # проверит отпечаток на шаге 5.
 MARK = re.compile(
-    r"instrumental|инструментал|минус|acapella|a cappella|karaoke|караоке|"
-    r"\blive\b|лайв|концерт|remix|ремикс|\brmx\b|sped ?up|slowed|reverb|"
-    r"\bclean\b|acoustic|акустик|\bdemo\b|демо|radio edit|extended|nightcore",
+    r"instrumental|инструментал|acapella|a cappella|karaoke|караоке|remix|ремикс|\brmx\b|"
+    r"sped ?up|slowed|radio edit|nightcore|\blive (?:at|in|from)\b|\bконцерт в\b",
     re.I)
+# эти бывают и просто словами названия: «So Fresh, So Clean» Kizaru,
+# «Live Fast move fast», «Хорошая акустика» не скачивались как «другая
+# версия» (2026-10-29). Версию они значат только в скобках или в хвосте
+# « - …»: «(Clean)», « - Live», «(Acoustic Version)»
+MARK_PART = re.compile(
+    r"\blive\b|лайв|концерт|минус|reverb|\bclean\b|acoustic|акустик|\bdemo\b|демо|extended", re.I)
 
 TRANSLIT = str.maketrans({
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
@@ -126,8 +131,15 @@ def title_keys(s):
     return {k for k in (norm_title(s), norm_title(DASH_TAIL.sub("", s))) if k}
 
 
+def version_part(s):
+    """Скобки и хвост « - …» названия — там, где пишут версию."""
+    s = str(s or "")
+    tail = DASH_TAIL.search(s)
+    return " ".join(re.findall(r"[\(\[](.*?)[\)\]]", s) + ([tail.group(0)] if tail else []))
+
+
 def marked(*texts):
-    return any(MARK.search(str(t or "")) for t in texts)
+    return any(MARK.search(str(t or "")) or MARK_PART.search(version_part(t)) for t in texts)
 
 
 def unique(items):
@@ -350,7 +362,9 @@ class Resolver:
                "info": {"preview": t.get("preview"), "version": t.get("title_version") or None,
                         "artist": who.get("name"), "artist_id": str(who.get("id") or "") or None}}
 
-        is_marked = marked(title, t.get("title_version"), release.get("title"))
+        # title_version у Deezer — вся целиком пометка версии, со скобками или без
+        tv = t.get("title_version")
+        is_marked = marked(title, "(%s)" % tv if tv else None, release.get("title"))
 
         def done(verdict, why, item=None, sim=None):
             out["verdict"], out["library_item"], out["similarity"] = verdict, item and item["id"], sim
