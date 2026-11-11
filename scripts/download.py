@@ -310,6 +310,9 @@ def soundcloud_match(artists, title, duration):
         return None
     other = None
     for e in found:
+        # yt-dlp иногда возвращает null в entries вместо объекта результата
+        if not isinstance(e, dict):
+            continue
         if not e.get("url") or not len_ok(float(e.get("duration") or 0), duration):
             continue
         own = bool(artist_keys([e.get("uploader")] + list(e.get("artists") or [])) & names)
