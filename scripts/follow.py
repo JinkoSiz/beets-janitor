@@ -260,6 +260,55 @@ def not_arrived(lib, rel, tracks):
     return [t for t in rest if not by_name(t)]
 
 
+# дубль из incoming, отбракованный leftovers.py: с какой разницей длины
+# считать, что лежащая в фонотеке копия — та же версия (как в leftovers)
+TWIN_LEN = 20
+
+
+def strict_title(s):
+    s = str(s or "").lower().replace("ё", "е")
+    return re.sub(r"[^a-zа-я0-9]+", " ", s).strip()
+
+
+def parked_twins(con, lib, rel, tracks):
+    """Скачанное доехало, но оказалось дублем — leftovers.py убрал его в
+    карантин, оставив копию из фонотеки. Сам релиз при этом не получает
+    дорожку, и раньше это выглядело как «не доехало».
+
+    Вернуть (есть такая же: [дорожки], YouTube дал другую версию: [дорожки]).
+    Копия той же длины (до TWIN_LEN) — дорожка в фонотеке. Длина сильно
+    другая — downtify взял с YouTube не ту версию (сингл вместо альбомной,
+    полную вместо короткой), а она совпала с уже имеющейся.
+    """
+    rows = con.execute("SELECT title, artist, kept_path FROM quarantine WHERE reason='duplicate' "
+                       "AND original_path LIKE '/incoming/%' AND moved_at>=?",
+                       (rel["decided_at"] or "",)).fetchall()
+    if not rows:
+        return [], []
+    names = disco.name_keys(rel["artist"]) | disco.name_keys(rel["deezer_name"])
+    by_path = {it["path"]: it for it in lib.items}
+    same, other = [], []
+    for t in tracks:
+        # название буква в букву, со скобками: downtify пишет в теги название
+        # из Spotify, а по ключам без скобок «Headlong (Embryo…)» склеивался
+        # с обычным «Headlong», скачанным для другого релиза
+        key = strict_title(t["title"])
+        for q in rows:
+            if strict_title(q["title"]) != key:
+                continue
+            if not any(disco.name_keys(n) & names for n in disco.artist_names(q["artist"])):
+                continue
+            kept = by_path.get(q["kept_path"] or "")
+            if kept is None:
+                continue
+            if abs(kept["length"] - (t["duration"] or 0)) <= TWIN_LEN:
+                same.append(t)
+            else:
+                other.append(t)
+            break
+    return same, other
+
+
 def not_in_spotify(t):
     """Дорожку искали в Spotify и не нашли, и на YouTube Music с SoundCloud
     тоже: её не качали и не скачают."""
@@ -365,6 +414,8 @@ def recheck_downloads(con, lib):
         if not tracks:
             continue
         rest = not_arrived(lib, rel, tracks)
+        twin_same, twin_other = parked_twins(con, lib, rel, rest) if rest else ([], [])
+        rest = [t for t in rest if t not in twin_same]
         if not rest:
             moved += 1
             put(rel, "in_library", None)
@@ -389,10 +440,11 @@ def recheck_downloads(con, lib):
             if st and st[0] == "error":
                 broken[t["id"]] = fetch_error(st[1])
         lost = [t for t in rest if not_in_spotify(t)]
-        late = [t for t in rest if t["id"] not in broken and not not_in_spotify(t)]
+        late = [t for t in rest if t["id"] not in broken and not not_in_spotify(t) and t not in twin_other]
         since = parse_ts(rel["decided_at"])
         if late and since is not None and now - since < datetime.timedelta(hours=ARRIVE_HOURS):
             continue
+        wrong = [t for t in twin_other if t["id"] not in broken]
         failed += 1
         parts = []
         for why in sorted(set(broken.values())):
@@ -404,6 +456,8 @@ def recheck_downloads(con, lib):
             parts.append("в Spotify не нашлось: " + titles(lost))
         if other:
             parts.append("в Spotify только другая версия: " + titles(other))
+        if wrong:
+            parts.append("YouTube дал другую версию, такая уже есть: " + titles(wrong))
         if late:
             parts.append("не доехало до фонотеки: " + titles(late))
         if broken and attempts(con, rel["id"]) < RETRY_MAX:
