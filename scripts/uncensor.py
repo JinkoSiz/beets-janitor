@@ -154,6 +154,10 @@ CYR = re.compile("[А-Яа-яЁё]")
 VA = {"various artists", "various", "va", "сборник", "разные исполнители"}
 
 
+POT_URL = os.environ.get("YT_POT_URL", "http://downtify:4416")
+POT_VERSION = "2.0.2"
+
+
 class Blocked(Exception):
     """YouTube просит подтвердить, что мы не бот, — на сегодня хватит."""
 
@@ -169,7 +173,9 @@ def ensure_ytdlp():
     if have and fresh:
         return True
     r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir",
-                        "--disable-pip-version-check", "--upgrade", "--target", PYLIB, "yt-dlp[default]"],
+                        "--disable-pip-version-check", "--upgrade", "--target", PYLIB, "yt-dlp[default]",
+                        # плагин PO-токенов; версия = версии сервера bgutil-pot у downtify
+                        "bgutil-ytdlp-pot-provider==" + POT_VERSION],
                        capture_output=True, text=True, timeout=900)
     if r.returncode == 0 and os.path.isdir(os.path.join(PYLIB, "yt_dlp")):
         open(PYLIB_STAMP, "w").close()
@@ -188,6 +194,9 @@ def ytdlp(args, timeout=240):
     proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
     if proxy:
         cmd += ["--proxy", proxy]
+    # сервер PO-токенов (bgutil-pot в сетевом пространстве downtify): без
+    # токенов YouTube всё чаще отвечает «подтвердите, что не бот»
+    cmd += ["--extractor-args", "youtubepot-bgutilhttp:base_url=" + POT_URL]
     r = subprocess.run(cmd + args, capture_output=True, text=True, env=e, timeout=timeout)
     if r.returncode != 0 and BOT.search(r.stderr or ""):
         raise Blocked((r.stderr or "").strip().splitlines()[-1][:160])
