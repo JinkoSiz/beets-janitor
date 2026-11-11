@@ -397,9 +397,26 @@ def enqueue(con, kind, payload=None, review_id=None):
     return cur.lastrowid
 
 
-def take_pending(con, limit=50):
-    """Забрать очередные действия. Помечаем running сразу, чтобы второй цикл
-    сторожа, если вдруг наложится на первый, не выполнил их дважды."""
+def take_pending(con, limit=1):
+    """Забрать действия, помечая каждое running непосредственно перед работой.
+
+    По умолчанию захватываем только одно: если внешний timeout убьёт
+    apply_actions.py, остальные останутся pending, а не зависнут running.
+    Записи старше 35 минут остались от убитого обработчика (его лимит — 30
+    минут); завершаем их ошибкой, чтобы следующий цикл не ждал их вечно.
+    """
+    stale = (datetime.datetime.now() - datetime.timedelta(minutes=35)).isoformat(timespec="seconds")
+    orphaned = con.execute("SELECT * FROM actions WHERE status='running' AND started_at<?", (stale,)).fetchall()
+    for r in orphaned:
+        result = "обработчик остановлен по таймауту; действие можно повторить"
+        con.execute("UPDATE actions SET status='failed', result=?, finished_at=? WHERE id=? AND status='running'",
+                    (result, now(), r["id"]))
+        if r["kind"] == "download":
+            payload = loads(r["payload"], {})
+            release_id = payload.get("release_id")
+            if release_id is not None:
+                con.execute("UPDATE releases SET status='failed', note=? WHERE id=? AND status='queued'",
+                            (result, int(release_id)))
     rows = con.execute("SELECT * FROM actions WHERE status='pending' ORDER BY id LIMIT ?", (limit,)).fetchall()
     for r in rows:
         con.execute("UPDATE actions SET status='running', started_at=? WHERE id=? AND status='pending'",

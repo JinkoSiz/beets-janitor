@@ -472,31 +472,52 @@ HANDLERS = {
 }
 
 
-def main():
+def process_actions():
     con = jdb.connect()
-    rows = jdb.take_pending(con)
-    if not rows:
-        return
-    lib = open_library()
+    lib = None
     ok = bad = 0
-    for r in rows:
-        handler = HANDLERS.get(r["kind"])
+    while True:
+        # Захватываем следующее действие только после завершения предыдущего.
+        # Если сторож убьёт этот процесс по общему таймауту, в running останется
+        # максимум текущее действие, а вся остальная очередь сохранится pending.
+        rows = jdb.take_pending(con)
+        if not rows:
+            break
+        if lib is None:
+            lib = open_library()
+        for r in rows:
+            handler = HANDLERS.get(r["kind"])
+            try:
+                if handler is None:
+                    raise Refused("неизвестное действие: %s" % r["kind"])
+                msg = handler(con, lib, jdb.loads(r["payload"], {}))
+                jdb.finish_action(con, r["id"], True, msg)
+                ok += 1
+                print("-- действие %d %s: %s" % (r["id"], r["kind"], msg))
+            except Refused as e:
+                jdb.finish_action(con, r["id"], False, "отклонено: %s" % e)
+                bad += 1
+                print("!! действие %d %s отклонено: %s" % (r["id"], r["kind"], e))
+            except Exception as e:
+                jdb.finish_action(con, r["id"], False, "ошибка: %s" % str(e)[:300])
+                bad += 1
+                print("!! действие %d %s упало: %s" % (r["id"], r["kind"], e))
+    if ok or bad:
+        print("-- действий из пульта: выполнено %d, не выполнено %d" % (ok, bad))
+
+
+def main():
+    # timeout завершает процесс сразу, поэтому блокировка снимается ядром.
+    # Она не даёт ручному запуску пересечься с циклом сторожа и случайно
+    # пометить ещё выполняемое действие как зависшее.
+    import fcntl
+    lock_path = os.path.join(os.path.dirname(env.JANITOR_DB), "apply_actions.lock")
+    with open(lock_path, "a+") as lock:
         try:
-            if handler is None:
-                raise Refused("неизвестное действие: %s" % r["kind"])
-            msg = handler(con, lib, jdb.loads(r["payload"], {}))
-            jdb.finish_action(con, r["id"], True, msg)
-            ok += 1
-            print("-- действие %d %s: %s" % (r["id"], r["kind"], msg))
-        except Refused as e:
-            jdb.finish_action(con, r["id"], False, "отклонено: %s" % e)
-            bad += 1
-            print("!! действие %d %s отклонено: %s" % (r["id"], r["kind"], e))
-        except Exception as e:
-            jdb.finish_action(con, r["id"], False, "ошибка: %s" % str(e)[:300])
-            bad += 1
-            print("!! действие %d %s упало: %s" % (r["id"], r["kind"], e))
-    print("-- действий из пульта: выполнено %d, не выполнено %d" % (ok, bad))
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        process_actions()
 
 
 if __name__ == "__main__":
