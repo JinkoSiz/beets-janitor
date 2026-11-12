@@ -322,6 +322,30 @@ def titles(tracks):
     return ", ".join(names) + (" и ещё %d" % (len(tracks) - 4) if len(tracks) > 4 else "")
 
 
+ARRIVAL_PARTS = ("не доехало до фонотеки: ", "YouTube дал другую версию, такая уже есть: ")
+
+
+def arrival_note(note, rest, wrong):
+    """Причина у релиза, уже записанного в «не скачалось», с пересчитанными
+    «не доехало» и «YouTube дал другую версию». Прочие части (ошибка downtify,
+    нет в Spotify) остаются как были: их без очереди downtify не проверить.
+    Прежде такой релиз навсегда оставался с первой причиной."""
+    if not note or not any(p in note for p in ARRIVAL_PARTS):
+        return note
+    parts = [p for p in note.split("; ") if p and not p.startswith(ARRIVAL_PARTS)]
+    keep = [p for p in parts if p != "повторю ночью"]
+    wrong = [t for t in wrong if t in rest]
+    late = [t for t in rest if t not in wrong and not not_in_spotify(t)
+            and not (jdb.loads(t["info"], {}) or {}).get("fetch_error")]
+    if wrong:
+        keep.append(ARRIVAL_PARTS[1] + titles(wrong))
+    if late:
+        keep.append(ARRIVAL_PARTS[0] + titles(late))
+    if "повторю ночью" in parts:
+        keep.append("повторю ночью")
+    return "; ".join(keep) or note
+
+
 def downtify_queue():
     """Что downtify знает о песнях: {id трека Spotify: (статус, сообщение)}.
 
@@ -419,6 +443,13 @@ def recheck_downloads(con, lib):
         if not rest:
             moved += 1
             put(rel, "in_library", None)
+            continue
+        if rel["status"] == "failed":
+            # причина могла устареть: дубль нашёлся в карантине уже после того,
+            # как релиз записали в «не скачалось»
+            note = arrival_note(rel["note"], rest, twin_other)
+            if note != rel["note"]:
+                put(rel, "failed", note)
             continue
         if rel["status"] == "queued":
             # скачивание не состоялось: действие упало, а релиз остался в очереди
