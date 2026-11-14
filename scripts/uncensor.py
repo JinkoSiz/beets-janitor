@@ -67,6 +67,10 @@ sitecustomize — через перехватчик сети его поиск �
   uncensor.py --dry           ничего не заменять и не записывать
 
 Cookies YouTube — файл CONFIG_DIR/youtube-cookies.txt (или путь в YT_COOKIES).
+
+Если отдельная звуковая дорожка отвечает 403, звук берётся из ролика 360p
+(формат 18, AAC 48–96 кбит/с). Для сравнения его хватает, но таким звуком
+скрипт сам не заменяет: только вопрос в пульт с пометкой о качестве.
 """
 import array
 import atexit
@@ -143,6 +147,10 @@ VFLOOR = 0.3              # голос эталона тише медианы в
 
 LOW_FMT = "139/233/worstaudio"
 HIGH_FMT = "251/140/bestaudio"
+# запасной путь, когда отдельный звук отвечает 403 (см. download)
+FALLBACK_FMT = "18"
+FALLBACK_MARK = ".f18"
+FALLBACK_ON = re.compile(r"HTTP Error 403|Requested format is not available", re.I)
 
 # «Sign in to confirm your age» — не блок, а возрастное ограничение одной
 # загрузки: её пропускаем. Раньше оно останавливало прогон каждую ночь на
@@ -239,14 +247,56 @@ def search(query):
         return []
 
 
-def download(vid, fmt, folder, tag):
-    """Звук загрузки в folder, файл называется tag.<расширение>. None — не вышло."""
-    ytdlp(["-f", fmt, "--no-playlist", "-o", os.path.join(folder, tag + ".%(ext)s"), "--", vid])
+def _found(folder, tag):
     for f in os.listdir(folder):
         p = os.path.join(folder, f)
         if f.startswith(tag + ".") and not f.endswith(".part") and os.path.getsize(p) > 10000:
             return p
     return None
+
+
+FALLBACK_KBPS = {}        # путь -> битрейт звука, вынутого из формата 18
+
+
+def audio_kbps(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+                        "stream=bit_rate", "-of", "csv=p=0", path], capture_output=True, text=True, timeout=60)
+    try:
+        return int(r.stdout.strip()) // 1000
+    except ValueError:
+        return None
+
+
+def is_fallback(path):
+    """Звук взят из ролика формата 18 (AAC 48–96 кбит/с), а не отдельной дорожкой."""
+    return bool(path) and FALLBACK_MARK in os.path.basename(path)
+
+
+def download(vid, fmt, folder, tag):
+    """Звук загрузки в folder, файл называется tag.<расширение>. None — не вышло.
+
+    С ноября 2026 YouTube на части аккаунтов привязывает PO-токен к ролику, и
+    bgutil такой токен делать не умеет: отдельная звуковая дорожка отвечает
+    403, а ролик 360p (формат 18, звук внутри) скачивается. Тогда звук берётся
+    из него без перекодирования, а в имени файла остаётся FALLBACK_MARK:
+    сравнивать по нему можно, заменять сам — нет (см. check)."""
+    r = ytdlp(["-f", fmt, "--no-playlist", "-o", os.path.join(folder, tag + ".%(ext)s"), "--", vid])
+    p = _found(folder, tag)
+    if p is not None or not FALLBACK_ON.search(r.stderr or ""):
+        return p
+    vtag = tag + ".v18"
+    ytdlp(["-f", FALLBACK_FMT, "--no-playlist", "-o", os.path.join(folder, vtag + ".%(ext)s"), "--", vid])
+    v = _found(folder, vtag)
+    if v is None:
+        return None
+    out = os.path.join(folder, tag + FALLBACK_MARK + ".m4a")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", v, "-vn", "-c:a", "copy", out],
+                   capture_output=True, timeout=300)
+    os.remove(v)
+    if not (os.path.isfile(out) and os.path.getsize(out) > 10000):
+        return None
+    FALLBACK_KBPS[out] = audio_kbps(out)
+    return out
 
 
 # ---------------------------------------------------------------- что проверять
@@ -586,7 +636,8 @@ def prepare(src, lib, tmp, like):
         return None
     ext, codec = codec_for(f, like)
     os.makedirs(env.UPLOADS_DIR, exist_ok=True)
-    dst = os.path.join(env.UPLOADS_DIR, "uncensor-%s-%d%s" % (src["id"], int(time.time()), ext))
+    dst = os.path.join(env.UPLOADS_DIR, "uncensor-%s-%d%s%s" % (
+        src["id"], int(time.time()), FALLBACK_MARK if is_fallback(f) else "", ext))
     cmd = ["ffmpeg", "-v", "error", "-y"]
     if not src["same"] and src["shift"] > 0.05:
         cmd += ["-ss", "%.3f" % src["shift"]]
@@ -594,6 +645,8 @@ def prepare(src, lib, tmp, like):
     if not src["same"]:
         cmd += ["-t", "%.3f" % length]
     subprocess.run(cmd + [dst], capture_output=True, timeout=300)
+    if is_fallback(f):
+        FALLBACK_KBPS[dst] = FALLBACK_KBPS.get(f)
     # в исходнике с YouTube бывает битый пакет; перекладка его отбрасывает,
     # и готовый файл обязан читаться без единой ошибки
     dur = duration(dst) if os.path.isfile(dst) else None
@@ -720,9 +773,15 @@ def check(con, it, auto, path=None, verbose=False):
             return verdict
 
         file = prepare(src, lib, tmp, path) if src else None
+        # звук из ролика 360p хуже нашего: заменять им — только с согласия в пульте
+        low = is_fallback(file)
         source = brief(src) if src else None
+        kbps = FALLBACK_KBPS.get(file) if low else None
+        if source is not None and low:
+            source["fallback"] = True
+            source["kbps"] = kbps
         refs_b = [brief(c) for c in refs]
-        if can_auto and file:
+        if can_auto and file and not low:
             jdb.enqueue(con, "replace", {"item_id": it.id, "file": file, "by": "uncensor",
                                          "censor": {"spots": spots, "source": source}})
             jdb.censor_set(con, it.id, path, size, "replacing", spots, refs_b, source)
@@ -733,7 +792,10 @@ def check(con, it, auto, path=None, verbose=False):
                "место показал только один эталон" if verdict == "suspect" else
                "нет загрузки той же длины без сдвига" if not fits(src, covers_all) else
                "вырезано подозрительно много" if cut > MAX_CUT * lib["len"] else
-               "звук эталона не скачался" if not file else "автозамена выключена")
+               "звук эталона не скачался" if not file else
+               "YouTube отдал звук только из ролика 360p (AAC %s кбит/с) — сам не меняю, "
+               "заменять ли таким звуком, решай сам" % (kbps or "?") if low else
+               "автозамена выключена")
         payload = {"item_id": it.id, "path": path, "artist": str(it.artist), "title": str(it.title),
                    "album": str(it.album), "length": round(lib["len"], 1), "format": str(it.format),
                    "spots": spots, "source": source, "file": file, "refs": refs_b, "why": why,
