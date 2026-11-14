@@ -60,6 +60,7 @@ dedup.py         drop duplicates confirmed by acoustic fingerprint
 consolidate.py   one album, one copy
 verify.py        does the audio match the release? (a few hundred tracks a night)
 uncensor.py      lines muted on streaming services, restored from release-time uploads
+autoresolve.py   close panel questions a second, independent check settles
 follow.py        new releases from the artists you follow
 covers.py        artwork
 cleanup_residue  prune the quarantine
@@ -215,6 +216,44 @@ first such answer, and the downloader shares the same exit. `yt-dlp` lives in
 its own directory under `CONFIG_DIR`, is refreshed weekly and runs in a
 separate process without `sitecustomize.py`.
 
+Since November 2026 YouTube answers "confirm you're not a bot" to every
+download from a VPN exit without a signed-in session, whatever the client
+and PO token. Put a Netscape-format cookie export of a YouTube account
+(the "Get cookies.txt LOCALLY" browser extension) at
+`CONFIG_DIR/youtube-cookies.txt`, or point `YT_COOKIES` at it. `yt-dlp`
+rewrites the cookie file it is given, so it gets a private copy; the export
+itself is never modified. Use a separate account: a few hundred lookups a
+night through the downloader's account adds to its ban risk.
+
+## Closing the obvious questions
+
+Each check that can be unsure asks the panel, and the queue grows faster than
+anyone clears it: by November 2026 one library had over 400 open questions.
+Most were not close calls but a weak signal from one method. `autoresolve.py`
+runs after `uncensor.py` and closes a question only when a second,
+independent check agrees; everything else stays for a human.
+
+The second opinion for audio is [AcoustID](https://acoustid.org): the
+fingerprint of the whole file is looked up in the open database, which returns
+the recordings it belongs to. On the first run it confirmed the right song
+where a Spotify preview matched at 51%, and caught real swaps — a track
+tagged "Stimulate" that was "Cleanin' Out My Closet".
+
+| Question | Closed when | Decision |
+|---|---|---|
+| wrong song (`verify.py`) | AcoustID recognises the same title and artist, version markers included | right track |
+| two copies (`consolidate.py`) | same title, length within 3 s and the same AcoustID fingerprint | keep the better copy, quarantine the other |
+| two copies | the AcoustID fingerprints differ | different versions, keep both |
+| filed as-is (`retry.py`) | open for more than `asis_days` (14) days | leave the tags alone |
+| muted line (`uncensor.py`) | three or more uploads, and each spot was shown by only one | noise |
+
+When AcoustID is sure the file is a different song, the question stays open
+and its card says what AcoustID heard. Every automatic decision is a journal
+entry (`autoresolve` / `decide`); rolling it back reopens the question. A copy
+sent to quarantine comes back from the quarantine as usual. The panel settings
+`auto_resolve`, `asis_days`, `autoresolve_limit` (AcoustID lookups per run)
+and `acoustid_key` control it.
+
 ## Install
 
 You need Docker and an image with beets, ffmpeg and `fpcalc` from chromaprint
@@ -297,6 +336,7 @@ linuxserver image layout.
 | `OWNER` | empty | `chown` the library afterwards, e.g. `1000:1000` |
 | `SPOOL_DIR` | empty | if set, nightly summaries are dropped here |
 | `FPCALC` | `fpcalc` | path to `fpcalc` if it isn't on `PATH` |
+| `YT_COOKIES` | `CONFIG_DIR/youtube-cookies.txt` | YouTube cookie export for `uncensor.py` (see above) |
 
 **`LOOSE_DIRS`** are folders holding standalone files rather than assembled
 albums. The distinction matters to the dedup: a spare copy sitting in a dump
@@ -320,6 +360,7 @@ that would leave a crippled release behind.
 | `covers.py` | artwork for singletons and for albums `fetchart` gave up on |
 | `verify.py` | checks the audio against a Spotify/Deezer preview of the matched release |
 | `uncensor.py` | finds lines muted on streaming services and restores them from release-time YouTube uploads |
+| `autoresolve.py` | closes panel questions that AcoustID or the question's age settle |
 | `leftovers.py` | sorts out what beets left in `incoming`: same audio → quarantine, another version → imported alongside |
 | `follow.py` | new releases from followed artists |
 | `discography.py` | an artist's discography against your library (also used by the panel) |

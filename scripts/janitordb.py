@@ -475,6 +475,10 @@ DEFAULTS = {
     "censor_auto": "1",
     "censor_limit": "300",
     "guest_artists_day": "10",  # исполнителей в день у гостя пульта; релизов у каждого — сколько угодно
+    "auto_resolve": "1",        # autoresolve.py: закрывать однозначные вопросы пульта самому
+    "autoresolve_limit": "400",  # запросов к AcoustID за прогон
+    "asis_days": "14",          # «как есть», открытый дольше стольких дней, закрывается сам
+    "acoustid_key": "1vOwZtEn",  # ключ приложения AcoustID (тот же, что у плагина chroma в beets)
     "nightly_hour": "5",
     "interval": "300",
 }

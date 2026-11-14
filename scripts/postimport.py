@@ -17,6 +17,20 @@
    released» оказывается ниже всех альбомов того же года. Проставляем
    исходную дату равной дате релиза, если исходной нет.
 
+3. Исполнитель под чужим именем. Скачанное по пульту приходит с именем из
+   Spotify: «Agatha Christie», когда в фонотеке и в списке исполнителей —
+   «Агата Кристи». Navidrome заводит второго исполнителя и делит альбомы.
+   Дорожка узнаётся по релизу, который скачивали (id Spotify или название
+   альбома + название трека), и получает имя исполнителя этого релиза —
+   в artist, albumartist и в многозначных artists/albumartists. Меняется
+   только имя, похожее на него в латинице: гость с другим именем остаётся.
+
+4. Дата не как у остального альбома. Navidrome собирает альбом с учётом
+   даты: старые дорожки «Избранного» с датой 2008, докачанные — с
+   2008-01-01, и альбом показывался трижды. Свежая дорожка получает дату,
+   которая у большинства уже лежащих дорожек этого альбома, — если год тот
+   же. Другой год не трогается: это уже не запись даты, а спорные данные.
+
 Трогает только дорожки, добавленные с прошлого запуска (отметка в общей
 базе); каждое изменение пишется в журнал и откатывается из пульта.
 
@@ -111,14 +125,114 @@ def main():
         log(i, "original_date", before, {"original_year": i.year, "original_month": i.month,
                                          "original_day": i.day, "why": "дата релиза"})
 
+    fixed_name = canonical_names(con, fresh, log)
+    fixed_album_date = align_dates(items, fresh, log)
+
     if con is not None:
         jdb.meta_set(con, "postimport_seen_until", max((float(i.added or 0) for i in items), default=time.time()))
     print("свежих дорожек: %d | исполнитель альбома поправлен: %d (сборников оставлено: %d) | исходная дата: %d"
-          % (len(fresh), fixed_aa, kept, fixed_date))
+          " | имя исполнителя как в фонотеке: %d | дата как у альбома: %d"
+          % (len(fresh), fixed_aa, kept, fixed_date, fixed_name, fixed_album_date))
     stats_out = os.environ.get("JANITOR_STATS_OUT")
     if stats_out and not DRY:
         with open(stats_out, "w", encoding="utf-8") as f:
-            json.dump({"fresh": len(fresh), "albumartist": fixed_aa, "original_date": fixed_date}, f)
+            json.dump({"fresh": len(fresh), "albumartist": fixed_aa, "original_date": fixed_date,
+                       "artist_name": fixed_name, "album_date": fixed_album_date}, f)
+
+
+def release_artists(con):
+    """Чьи релизы скачивали: id Spotify дорожки -> имя исполнителя и
+    (альбом, название) -> имя. Имя — как исполнитель заведён в пульте."""
+    by_id, by_title = {}, {}
+    if con is None:
+        con = jdb.connect()
+    for r in con.execute("SELECT rt.title, rt.info, rl.title AS album, a.name FROM release_tracks rt "
+                         "JOIN releases rl ON rl.id = rt.release_id JOIN artists a ON a.id = rl.artist_id "
+                         "WHERE rl.status IN ('queued', 'downloading', 'in_library', 'failed')"):
+        info = jdb.loads(r["info"], {}) or {}
+        if info.get("spotify_id"):
+            by_id[info["spotify_id"]] = r["name"]
+        by_title[(disco.norm_title(r["album"]), disco.norm_title(r["title"]))] = r["name"]
+    return by_id, by_title
+
+
+def renamed(names, old, new):
+    return [new if disco.name_keys(n) & disco.name_keys(old) else n for n in names]
+
+
+def translit_ratio(a, b):
+    """Насколько два имени похожи в латинице: «agatha christie» и «агата
+    кристи» (agata kristi) — 0.85, «vadim samoylov» и «агата кристи» — 0.3."""
+    import difflib
+    ka, kb = disco.name_keys(a), disco.name_keys(b)
+    return max((difflib.SequenceMatcher(None, x, y).ratio() for x in ka for y in kb), default=0.0)
+
+
+SAME_NAME = 0.7     # от такого сходства в латинице имена — одно и то же имя
+
+
+def canonical_names(con, fresh, log):
+    by_id, by_title = release_artists(con)
+    fixed = 0
+    for i in fresh:
+        name = by_id.get(str(i.get("spotify_track_id") or "")) or \
+            by_title.get((disco.norm_title(i.album), disco.norm_title(i.title)))
+        names = disco.artist_names(str(i.artist))
+        if not name or not names or any(disco.name_keys(n) & disco.name_keys(name) for n in names):
+            continue
+        # заменяется только имя, которое и есть исполнитель релиза в другом
+        # написании; у «Вадим Самойлов, Agatha Christie» — второе, не первое
+        old, ratio = max(((n, translit_ratio(n, name)) for n in names), key=lambda x: x[1])
+        if ratio < SAME_NAME:
+            continue
+        before = {f: i.get(f) for f in ("artist", "albumartist", "artists", "albumartists")}
+        after = {"artist": str(i.artist).replace(old, name, 1),
+                 "albumartist": name if disco.name_keys(str(i.albumartist)) & disco.name_keys(old) else i.albumartist,
+                 "artists": renamed(list(i.get("artists") or []), old, name),
+                 "albumartists": renamed(list(i.get("albumartists") or []), old, name)}
+        print("   %s — %s: исполнитель %s -> %s" % (str(i.artist)[:30], str(i.title)[:30], old, name))
+        fixed += 1
+        if DRY:
+            continue
+        for f, v in after.items():
+            i[f] = v
+        i.store()
+        i.try_write()
+        log(i, "artist", before, dict(after, why="имя исполнителя как в пульте"))
+    return fixed
+
+
+def align_dates(items, fresh, log):
+    fresh_ids = {i.id for i in fresh}
+    dates = collections.defaultdict(collections.Counter)
+    for i in items:
+        if i.id not in fresh_ids and str(i.album or "").strip():
+            key = (str(i.albumartist or "").strip().lower(), str(i.album).strip().lower())
+            dates[key][(int(i.year or 0), int(i.month or 0), int(i.day or 0))] += 1
+    fixed = 0
+    for i in fresh:
+        key = (str(i.albumartist or "").strip().lower(), str(i.album or "").strip().lower())
+        if not dates.get(key):
+            continue
+        (y, m, d), n = dates[key].most_common(1)[0]
+        mine = (int(i.year or 0), int(i.month or 0), int(i.day or 0))
+        # только запись даты внутри того же года («2008» против
+        # «2008-01-01»); другой год — не формат, а спорные данные, их не трогаем
+        if not y or mine == (y, m, d) or mine[0] != y:
+            continue
+        print("   %s — %s: дата %s -> %s, как у альбома" % (str(i.artist)[:30], str(i.title)[:30],
+                                                         "-".join(map(str, mine)), "-".join(map(str, (y, m, d)))))
+        fixed += 1
+        if DRY:
+            continue
+        before = {"year": i.year, "month": i.month, "day": i.day, "original_year": i.original_year,
+                  "original_month": i.original_month, "original_day": i.original_day}
+        i.year, i.month, i.day = y, m, d
+        i.original_year, i.original_month, i.original_day = y, m, d
+        i.store()
+        i.try_write()
+        log(i, "album_date", before, {"year": y, "month": m, "day": d, "why": "дата как у альбома"})
+    return fixed
 
 
 if __name__ == "__main__":

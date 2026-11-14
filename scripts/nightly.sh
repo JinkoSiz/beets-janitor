@@ -290,6 +290,11 @@ nightly_body() {
     echo "=== $(date '+%F %T') цензура стримингов"
     step uncensor 11400 python3 "$SCRIPTS"/uncensor.py
   fi
+  # однозначные вопросы пульта закрываются сами (второе мнение — AcoustID)
+  if [ -f "$SCRIPTS"/autoresolve.py ]; then
+    echo "=== $(date '+%F %T') авторазбор пульта"
+    step autoresolve 3600 python3 "$SCRIPTS"/autoresolve.py
+  fi
   if [ -f "$SCRIPTS"/follow.py ]; then
     echo "=== $(date '+%F %T') новинки исполнителей"
     step follow 3600 python3 "$SCRIPTS"/follow.py

@@ -65,8 +65,11 @@ sitecustomize — через перехватчик сети его поиск �
                               проверка метода на старых файлах из карантина
   uncensor.py --mark N ...    отметить дорожки, уже исправленные вручную
   uncensor.py --dry           ничего не заменять и не записывать
+
+Cookies YouTube — файл CONFIG_DIR/youtube-cookies.txt (или путь в YT_COOKIES).
 """
 import array
+import atexit
 import collections
 import difflib
 import json
@@ -155,6 +158,26 @@ VA = {"various artists", "various", "va", "сборник", "разные исп
 
 
 POT_URL = os.environ.get("YT_POT_URL", "http://downtify:4416")
+# cookies аккаунта YouTube (Netscape, «Get cookies.txt LOCALLY»): без них
+# выход VLESS с ноября 2026 получает «подтвердите, что не бот» на каждой
+# загрузке, клиент и PO-токен не помогают. yt-dlp переписывает файл cookies
+# при каждом запуске, поэтому ему отдаётся копия, а исходник не трогается
+COOKIES = os.environ.get("YT_COOKIES", os.path.join(env.CONFIG_DIR, "youtube-cookies.txt"))
+_cookie_copy = None
+
+
+def cookie_file():
+    """Рабочая копия cookies для yt-dlp или None, если файла нет."""
+    global _cookie_copy
+    if not os.path.isfile(COOKIES):
+        return None
+    if _cookie_copy is None:
+        fd, _cookie_copy = tempfile.mkstemp(prefix="yt-cookies-", suffix=".txt")
+        os.close(fd)
+        os.chmod(_cookie_copy, 0o600)
+        shutil.copyfile(COOKIES, _cookie_copy)
+        atexit.register(lambda: os.path.exists(_cookie_copy) and os.unlink(_cookie_copy))
+    return _cookie_copy
 POT_VERSION = "2.0.2"
 
 
@@ -197,6 +220,11 @@ def ytdlp(args, timeout=240):
     # сервер PO-токенов (bgutil-pot в сетевом пространстве downtify): без
     # токенов YouTube всё чаще отвечает «подтвердите, что не бот»
     cmd += ["--extractor-args", "youtubepot-bgutilhttp:base_url=" + POT_URL]
+    cookies = cookie_file()
+    if cookies:
+        # с cookies клиент web_safari уходит в SABR и даёт только видео;
+        # mweb с токеном отдаёт отдельный звук (так же настроен downtify)
+        cmd += ["--cookies", cookies, "--extractor-args", "youtube:player_client=mweb,web_safari"]
     r = subprocess.run(cmd + args, capture_output=True, text=True, env=e, timeout=timeout)
     if r.returncode != 0 and BOT.search(r.stderr or ""):
         raise Blocked((r.stderr or "").strip().splitlines()[-1][:160])
@@ -435,7 +463,8 @@ def decide(refs):
     """По сравнениям с эталонами: вердикт, подтверждённые места, одиночные.
 
     Место — (начало, конец, вид, {номера эталонов}). Подтверждено, если его
-    показали хотя бы два эталона. Одиночное место поднимает вопрос, только
+    показали хотя бы два эталона. Одиночное отбрасывается, если два других
+    эталона в этом месте с файлом совпали. Одиночное место поднимает вопрос, только
     если его показал эталон, годный в источник: загрузки похуже (видео с
     текстом, премьеры) шумят и могут лишь подтвердить чужую находку.
     """
@@ -451,7 +480,11 @@ def decide(refs):
         else:
             spots.append(s)
     sure = [s for s in spots if len(s[3]) >= 2]
-    single = [s for s in spots if len(s[3]) < 2 and any(refs[i]["sim"] >= SOURCE_SIM for i in s[3])]
+    # одиночное место, с которым не согласны два других эталона, — шум: на
+    # «Матёром волке» (КиШ) три загрузки той же записи, места 1:27 и 2:10
+    # показала одна, две другие там с файлом совпали
+    single = [s for s in spots if len(s[3]) < 2 and any(refs[i]["sim"] >= SOURCE_SIM for i in s[3])
+              and len(refs) - len(s[3]) < 2]
     if sure:
         verdict = "censored"
     elif single:

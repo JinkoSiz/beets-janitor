@@ -55,7 +55,7 @@ RUN_FLAG = env.RUN_FLAG
 # а не служебные (id, path, album_id меняются своими действиями)
 ROLLBACK_FIELDS = {"album", "albumartist", "artist", "title", "year", "month", "day", "disc",
                    "disctotal", "track", "comp", "mb_trackid", "mb_albumid", "data_source", "label", "genre",
-                   "original_year", "original_month", "original_day"}
+                   "original_year", "original_month", "original_day", "artists", "albumartists"}
 
 
 class Refused(Exception):
@@ -239,7 +239,9 @@ def do_rollback(con, lib, p):
     if ev["reverted_by"]:
         raise Refused("эта запись уже откачена")
     before, after = jdb.loads(ev["before"], {}), jdb.loads(ev["after"], {})
-    if ev["op"] == "quarantine":
+    if ev["script"] == "autoresolve" and ev["op"] == "decide":
+        msg = undo_autoresolve(con, before)
+    elif ev["op"] == "quarantine":
         row = con.execute("SELECT id FROM quarantine WHERE path=?", (after.get("path"),)).fetchone()
         if row is None:
             raise Refused("файла нет в карантине")
@@ -280,6 +282,23 @@ def do_rollback(con, lib, p):
                         item_id=ev["item_id"], path=ev["path"])
     con.execute("UPDATE events SET reverted_by=? WHERE id=?", (rid, ev["id"]))
     return msg
+
+
+def undo_autoresolve(con, before):
+    """Решение авторазбора отменено: вопрос снова открыт в пульте. Если по
+    нему уже убрали копию в карантин, её возвращают из карантина."""
+    rid = (before or {}).get("review")
+    row = con.execute("SELECT * FROM reviews WHERE id=?", (rid,)).fetchone() if rid else None
+    if row is None:
+        raise Refused("вопроса больше нет")
+    con.execute("UPDATE actions SET status='cancelled', finished_at=? WHERE review_id=? AND status='pending'",
+                (jdb.now(), rid))
+    done = con.execute("SELECT id FROM actions WHERE review_id=? AND status='done'", (rid,)).fetchone()
+    con.execute("UPDATE reviews SET status='open', decision=NULL, decided_at=NULL WHERE id=?", (rid,))
+    if row["kind"] == "censored":
+        p = jdb.loads(row["payload"], {}) or {}
+        con.execute("UPDATE censor SET verdict='suspect' WHERE item_id=? AND verdict='clean'", (p.get("item_id"),))
+    return "вопрос снова открыт" + (" — убранную копию верни из карантина" if done else "")
 
 
 def do_accept(con, lib, p):

@@ -30,6 +30,7 @@
       <div class="meter" data-value="{{ p.similarity|pct100 }}" data-bad="{{ ref_bad|pct100 }}" data-ok="{{ ref_ok|pct100 }}" data-label="превью найдено в файле"></div>
       {% if not c.exists %}<div class="missing">Дорожки уже нет в фонотеке — вопрос можно снять.</div>{% endif %}
       <div class="hint">{% if p.level == 'bad' %}Превью источника в файле не нашлось. Скорее всего, под этими тегами лежит другая песня — так downtify иногда приносит чужой трек с YouTube Music.{% else %}Сходство между «та же запись» и «другая песня». Так бывает у sped up, ремастеров и радиоверсий — послушай и реши.{% endif %}{% if p.ref.duration and p.length %} Длина у источника {{ p.ref.duration|dur }}, у файла {{ p.length|dur }}.{% endif %}</div>
+      {% if p.acoustid_says %}<div class="hint"><b>AcoustID слышит в файле другую песню:</b> {% if p.acoustid_says.url %}<a href="{{ p.acoustid_says.url }}" target="_blank" rel="noopener">{{ p.acoustid_says.artists|join:", " }} — {{ p.acoustid_says.title }}</a>{% else %}{{ p.acoustid_says.artists|join:", " }} — {{ p.acoustid_says.title }}{% endif %} ({{ p.acoustid_says.score|pct100 }}%). Похоже на настоящую подмену.</div>{% endif %}
       <div class="actions">
         {% if c.exists %}
         <button class="btn primary" hx-post="/review/{{ r.id }}/decide" hx-vals='{"decision":"quarantine"}' hx-target="#card-{{ r.id }}" hx-swap="outerHTML">В карантин</button>

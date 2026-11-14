@@ -465,12 +465,15 @@ def can_rollback(ev, before):
         return False
     if ev["op"] in ("quarantine", "move", "rename"):
         return True
+    if ev["script"] == "autoresolve" and ev["op"] == "decide":
+        # вопрос, закрытый авторазбором, можно открыть снова
+        return isinstance(before, dict) and bool(before.get("review"))
     if ev["op"] == "replace":
         # прежний звук лежит в карантине: откат вернёт его на место
         return bool(ev["item_id"]) and isinstance(before, dict) and bool(before.get("path"))
     return isinstance(before, dict) and bool(ev["item_id"]) and any(
         k in before for k in ("album", "albumartist", "artist", "title", "year", "disc", "track", "comp", "mb_trackid",
-                              "original_year"))
+                              "original_year", "artists"))
 
 
 # ---------------------------------------------------------------- новинки и исполнители
