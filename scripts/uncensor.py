@@ -829,9 +829,14 @@ def check(con, it, auto, path=None, verbose=False):
 
 def close_stale(con, it, size, verdict, n):
     """Открытый вопрос о цензуре, а перепроверка говорит «чисто»: закрыть.
-    Пишется как решение авторазбора, поэтому откат из журнала тот же."""
-    row = con.execute("SELECT id, title FROM reviews WHERE key=? AND status='open'",
-                      ("censor:%d:%d" % (it.id, size),)).fetchone()
+    Пишется как решение авторазбора, поэтому откат из журнала тот же.
+    Одного эталона мало: «чисто» по одному — это лишь то, что он не увидел.
+    Вопрос ищется по дорожке, а не по ключу: размер в ключе меняется, когда
+    у файла переписывают теги."""
+    if n < 2:
+        return
+    row = con.execute("SELECT id, title FROM reviews WHERE kind='censored' AND status='open' "
+                      "AND json_extract(payload, '$.item_id')=?", (it.id,)).fetchone()
     if row is None:
         return
     why = "перепроверка: %s по %d эталонам" % ("чисто" if verdict == "clean" else "оригинал у нас", n)
