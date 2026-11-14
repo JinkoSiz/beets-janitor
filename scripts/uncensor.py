@@ -626,6 +626,9 @@ def codec_for(f, like):
     return src, ["-c:a", "copy"]
 
 
+PREP_WHY = {}             # id эталона -> почему файла для замены нет (для карточки)
+
+
 def prepare(src, lib, tmp, like):
     """Звук эталона в хорошем качестве — в папку загрузок пульта, откуда его
     берёт действие replace, в формате заменяемого файла like (см. codec_for).
@@ -633,6 +636,7 @@ def prepare(src, lib, tmp, like):
     length = lib["len"]
     f = download(src["id"], HIGH_FMT, tmp, "hi")
     if f is None:
+        PREP_WHY[src["id"]] = "звук эталона не скачался"
         return None
     ext, codec = codec_for(f, like)
     os.makedirs(env.UPLOADS_DIR, exist_ok=True)
@@ -651,10 +655,19 @@ def prepare(src, lib, tmp, like):
     # и готовый файл обязан читаться без единой ошибки
     dur = duration(dst) if os.path.isfile(dst) else None
     ok = dur is not None and abs(dur - length) <= 2.0 and decode_errors(dst) == 0
+    if dur is None:
+        PREP_WHY[src["id"]] = "звук эталона не перекодировался"
+    elif abs(dur - length) > 2.0:
+        PREP_WHY[src["id"]] = "загрузка %s трека на %.1f с — целиком ею не заменить" % (
+            "короче" if dur < length else "длиннее", abs(dur - length))
+    elif not ok:
+        PREP_WHY[src["id"]] = "звук эталона битый"
     if ok:
         # хорошее качество — та же запись, что сравнивалась в плохом
         c = compare(lib, dst)
         ok = c is not None and c["sim"] >= SAME_REC and abs(c["shift"]) <= SAME_SHIFT
+        if not ok:
+            PREP_WHY[src["id"]] = "в хорошем качестве загрузка не совпала с треком"
     if not ok:
         if os.path.exists(dst):
             os.remove(dst)
@@ -746,6 +759,7 @@ def check(con, it, auto, path=None, verbose=False):
         if verdict in ("clean", "original"):
             if not DRY:
                 jdb.censor_set(con, it.id, path, size, verdict, refs=[brief(c) for c in refs])
+                close_stale(con, it, size, verdict, len(refs))
             if verbose:
                 print("   %s (эталонов %d)" % ("чисто" if verdict == "clean" else "у нас оригинал", len(refs)))
             return verdict
@@ -799,6 +813,7 @@ def check(con, it, auto, path=None, verbose=False):
         payload = {"item_id": it.id, "path": path, "artist": str(it.artist), "title": str(it.title),
                    "album": str(it.album), "length": round(lib["len"], 1), "format": str(it.format),
                    "spots": spots, "source": source, "file": file, "refs": refs_b, "why": why,
+                   "file_why": PREP_WHY.get(src["id"]) if src and not file else None,
                    "sure": verdict == "censored"}
         status, decision = jdb.ask(con, "censored", "censor:%d:%d" % (it.id, size), name, payload)
         if status in ("resolved", "dismissed") and decision != "replace":
@@ -810,6 +825,22 @@ def check(con, it, auto, path=None, verbose=False):
         return verdict
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def close_stale(con, it, size, verdict, n):
+    """Открытый вопрос о цензуре, а перепроверка говорит «чисто»: закрыть.
+    Пишется как решение авторазбора, поэтому откат из журнала тот же."""
+    row = con.execute("SELECT id, title FROM reviews WHERE key=? AND status='open'",
+                      ("censor:%d:%d" % (it.id, size),)).fetchone()
+    if row is None:
+        return
+    why = "перепроверка: %s по %d эталонам" % ("чисто" if verdict == "clean" else "оригинал у нас", n)
+    con.execute("UPDATE reviews SET status='resolved', decision='dismiss', decided_at=? WHERE id=?",
+                (jdb.now(), row["id"]))
+    jdb.log_event(con, "autoresolve", "decide", {"review": row["id"], "status": "open"},
+                  {"review": row["id"], "kind": "censored", "decision": "dismiss", "why": why,
+                   "title": row["title"]}, item_id=it.id, path=it.path.decode("utf-8", "replace"))
+    print("   вопрос #%d закрыт: %s" % (row["id"], why))
 
 
 # ---------------------------------------------------------------- запуск

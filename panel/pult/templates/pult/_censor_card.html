@@ -19,7 +19,7 @@
         {% if c.has_file %}
         <div class="player-row"><button class="play" aria-pressed="false" aria-label="Слушать оригинал"><svg viewBox="0 0 12 12"><path d="M2 1l9 5-9 5z"/></svg></button><div class="wave" data-seed="{{ r.id|add:17 }}"></div></div>
         <audio preload="none" src="/audio/upload/{{ r.id }}"></audio>
-        {% else %}<div class="missing">звук оригинала не скачан — только ссылка</div>{% endif %}
+        {% else %}<div class="missing">файла для замены нет{% if p.file_why %}: {{ p.file_why }}{% endif %} — только ссылка. Можно загрузить свой файл ниже.</div>{% endif %}
         <div class="player-meta">{% if p.source %}<a href="{{ p.source.url }}" target="_blank" rel="noopener">{{ p.source.title }}</a> — {{ p.source.channel }}{% endif %}</div>
       </div>
     </div>
