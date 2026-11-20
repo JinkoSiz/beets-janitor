@@ -433,9 +433,22 @@ def recheck_downloads(con, lib):
                            "LEFT JOIN artists a ON a.id=r.artist_id "
                            "WHERE r.status IN ('queued', 'downloading', 'failed')").fetchall():
         rows = con.execute("SELECT * FROM release_tracks WHERE release_id=? ORDER BY id", (rel["id"],)).fetchall()
-        # повторы без своего релиза качаются с этим (download.orphans) — их и ждём
-        tracks = [t for t in rows if disco.wanted(t)] + download.orphans(con, rel, rows)
+        # повторы без своего релиза качаются с этим (download.orphans) — их и ждём.
+        # У ушедшего в downtify — только те, что ушли (пометка orphan): иначе
+        # к нему приписываются повторы релизов, упавших уже после скачивания
+        if rel["status"] == "queued":
+            orph = download.orphans(con, rel, rows)
+        else:
+            orph = download.sent_orphans(con, rel, rows)
+        tracks = [t for t in rows if disco.wanted(t)] + orph
         if not tracks:
+            if rel["status"] == "queued":
+                # скачивать было нечего, а релиз остался «в очереди» навсегда
+                act = con.execute("SELECT status FROM actions WHERE kind='download' "
+                                  "AND json_extract(payload, '$.release_id')=? ORDER BY id DESC LIMIT 1",
+                                  (rel["id"],)).fetchone()
+                if act is not None and act["status"] in ("done", "failed"):
+                    put(rel, "new", "скачивать нечего: спорные дорожки ждут решения")
             continue
         rest = not_arrived(lib, rel, tracks)
         twin_same, twin_other = parked_twins(con, lib, rel, rest) if rest else ([], [])

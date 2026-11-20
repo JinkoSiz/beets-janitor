@@ -554,6 +554,39 @@ def find_songs(con, rel, rows, want, artist, alt=False):
     return songs, missing, other, youtube, cloud
 
 
+def mark_orphans(con, rows, ids):
+    """Пометить повторы, которые ушли с этим релизом (orphan в info).
+
+    follow ждёт только их: если считать сирот заново, то после того, как
+    релизы-двойники упали в «не скачалось», к релизу приписываются повторы,
+    которые в downtify никогда не уходили, и он висит «качается» 6 часов,
+    а потом пишет ложное «не доехало» (Кино «Легенда», 2026-11-20).
+    """
+    for t in rows:
+        if t["verdict"] != "dup":
+            continue
+        row = con.execute("SELECT info FROM release_tracks WHERE id=?", (t["id"],)).fetchone()
+        info = jdb.loads(row["info"] if row else None, {}) or {}
+        # 0 у неушедших тоже пишем: по наличию ключа follow отличает
+        # релизы, скачанные до пометки, — у них сироты считаются по-старому
+        flag = 1 if t["id"] in ids else 0
+        if info.get("orphan") == flag:
+            continue
+        info["orphan"] = flag
+        con.execute("UPDATE release_tracks SET info=? WHERE id=?", (json.dumps(info, ensure_ascii=False), t["id"]))
+
+
+def sent_orphans(con, rel, rows):
+    """Повторы, которые реально ушли с релизом (см. mark_orphans).
+
+    Релиз скачан до появления пометки — считаем сирот, как раньше.
+    """
+    dups = [(t, jdb.loads(t["info"], {}) or {}) for t in rows if t["verdict"] == "dup" and not t["decision"]]
+    if not any("orphan" in info for _, info in dups):
+        return orphans(con, rel, rows)
+    return [t for t, info in dups if info.get("orphan")]
+
+
 def release(con, release_id, artist_name=None, retry=False, alt=False):
     """Отправить в downtify то, что в релизе решено скачать. Вернуть отчёт.
 
@@ -574,6 +607,13 @@ def release(con, release_id, artist_name=None, retry=False, alt=False):
             con.execute("UPDATE releases SET status='in_library', note=NULL WHERE id=?", (release_id,))
             return "всё из релиза уже в фонотеке"
     if not want:
+        # не оставлять релиз «в очереди» навсегда: follow такие пропускает
+        # (Lida «мышкой» висела так с 2026-11-14 — единственная дорожка спорная)
+        ask = any(t["verdict"] == "ask" and not t["decision"] for t in rows)
+        note = ("скачивать нечего: спорные дорожки ждут решения" if ask
+                else "скачивать нечего: всё уже есть или качается с другими релизами")
+        con.execute("UPDATE releases SET status='new', note=? WHERE id=? AND status IN ('queued', 'failed')",
+                    (note, release_id))
         return "в релизе нечего качать"
     artist = artist_name or rel["deezer_name"] or rel["artist"] or ""
     try:
@@ -607,6 +647,7 @@ def release(con, release_id, artist_name=None, retry=False, alt=False):
         raise RuntimeError("с SoundCloud не скачалось: %s" % ", ".join(failed[:5]))
     con.execute("UPDATE releases SET status='downloading', decided_at=?, note=NULL WHERE id=?",
                 (jdb.now(), release_id))
+    mark_orphans(con, rows, {t["id"] for t in want if t["verdict"] == "dup" and not t["decision"]})
     jdb.log_event(con, "download", "queue", None,
                   {"release": rel["title"], "artist": artist, "tracks": len(songs), "missing": missing,
                    "youtube": youtube, "soundcloud": fetched})
