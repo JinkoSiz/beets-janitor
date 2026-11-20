@@ -230,9 +230,10 @@ def ytdlp(args, timeout=240):
     cmd += ["--extractor-args", "youtubepot-bgutilhttp:base_url=" + POT_URL]
     cookies = cookie_file()
     if cookies:
-        # с cookies клиент web_safari уходит в SABR и даёт только видео;
-        # mweb с токеном отдаёт отдельный звук (так же настроен downtify)
-        cmd += ["--cookies", cookies, "--extractor-args", "youtube:player_client=mweb,web_safari"]
+        # mweb/web_safari с 2026-11 ловят 403 на звуке: токен bgutil не
+        # проходит привязку GVS PO Token к видео. web_creator и web_music
+        # с cookies отдают 251 opus (проверено 2026-11-20)
+        cmd += ["--cookies", cookies, "--extractor-args", "youtube:player_client=web_creator,web_music"]
     r = subprocess.run(cmd + args, capture_output=True, text=True, env=e, timeout=timeout)
     if r.returncode != 0 and BOT.search(r.stderr or ""):
         raise Blocked((r.stderr or "").strip().splitlines()[-1][:160])
