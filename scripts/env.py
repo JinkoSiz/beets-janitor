@@ -78,6 +78,11 @@ SPOTIFY_BREAKER_FILE = os.path.join(CONFIG_DIR, ".spotify-breaker")
 SPOTIFY_CACHE_DB = os.path.join(CONFIG_DIR, "spotify-cache.db")
 SPOTIFY_DAILY = int(os.environ.get("SPOTIFY_DAILY", "2500"))
 
+# Пауза закачек YouTube: follow.py включает её, когда downtify ловит пачку
+# 403 или «подтвердите, что не бот», а download.py и follow.py на время
+# паузы ничего в downtify не шлют. Формат — JSON, см. download.youtube_paused.
+YOUTUBE_BREAKER_FILE = os.path.join(CONFIG_DIR, ".youtube-breaker")
+
 # Свалки одиночных файлов. Дедуп обращается с ними иначе, чем с альбомами:
 # лишнюю копию из свалки убрать можно, а выдернуть дорожку из собранного
 # альбома нельзя — останется покалеченный релиз.

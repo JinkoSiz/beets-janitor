@@ -15,6 +15,10 @@ downtify качает только по ссылке на трек Spotify (ил
 сеть) — не «трека нет»: релиз становится «не скачалось» с этой причиной, а
 ночью follow.py повторяет его сам, не засчитывая такую попытку.
 
+Пока follow.py держит паузу YouTube (пачка 403 или «не бот»), в downtify
+ничего не уходит: релиз становится «не скачалось» с причиной
+YOUTUBE_PAUSED, попытка не засчитывается, повтор — после паузы.
+
 Звук downtify берёт с YouTube Music, откуда и подмены. После импорта
 каждую скачанную дорожку сверит verify.py.
 
@@ -78,6 +82,58 @@ def spotify_paused():
     except Exception:
         pass
     return ""
+
+
+# ---------------------------------------------------------------- пауза YouTube
+YOUTUBE_PAUSED = "YouTube режет закачки"   # по этому началу follow.py узнаёт отказ из-за паузы
+
+
+class YouTubePaused(RuntimeError):
+    """Пауза YouTube: в downtify сейчас не шлём — всё равно получит 403."""
+
+    def __init__(self, why):
+        super().__init__("%s (%s); повторю, когда пауза кончится" % (YOUTUBE_PAUSED, why))
+
+
+def youtube_state():
+    try:
+        with open(env.YOUTUBE_BREAKER_FILE, encoding="utf-8") as f:
+            st = json.load(f)
+        return st if isinstance(st, dict) else {}
+    except Exception:
+        return {}
+
+
+def youtube_save(st):
+    tmp = env.YOUTUBE_BREAKER_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(st, f, ensure_ascii=False)
+    os.replace(tmp, env.YOUTUBE_BREAKER_FILE)
+
+
+def youtube_paused():
+    """Пауза YouTube включена — «до ЧЧ:ММ: причина»; нет — пустая строка.
+
+    После пачки закачек YouTube режет аккаунт или IP целиком, на любом
+    клиенте: 2026-11-20 web_creator, а за ним и web_music после 14:20 по
+    Москве отдавали 403 даже на ролики, которые утром качались. Слать
+    дальше — жечь попытки и злить YouTube ещё сильнее."""
+    st = youtube_state()
+    until = float(st.get("until") or 0)
+    if time.time() < until:
+        return "до %s: %s" % (time.strftime("%d.%m %H:%M", time.localtime(until)), st.get("why") or "пачка отказов")
+    return ""
+
+
+def note_youtube_paused(con, tracks):
+    """Отказ из-за паузы: у дорожек вид сбоя «youtube», follow.py повторит
+    скачивание, когда пауза кончится."""
+    for t in tracks:
+        row = con.execute("SELECT info FROM release_tracks WHERE id=?", (t["id"],)).fetchone()
+        info = jdb.loads(row["info"], {}) or {}
+        info["fetch_error"] = "youtube"
+        info["fetch_note"] = YOUTUBE_PAUSED
+        con.execute("UPDATE release_tracks SET info=? WHERE id=?", (json.dumps(info, ensure_ascii=False), t["id"]))
 
 
 def credentials():
@@ -346,6 +402,9 @@ def soundcloud_fetch(rel, t, artist, sc, song=None):
         if not len_ok(f.length or 0, t["duration"] or 0):
             raise RuntimeError("SoundCloud отдал %s вместо %s" % (mmss(f.length or 0), mmss(t["duration"] or 0)))
         f.title, f.artist, f.albumartist, f.album = t["title"], who, who, rel["title"]
+        # жанр на SoundCloud пишет заливщик: там реклама сайтов и ники
+        # («ВсеСаундтреки.рф» у Агаты Кристи «Секрет», 2026-11-20)
+        del f.genre
         if song:
             f.title = song.get("name") or f.title
             f.artist = ", ".join(song.get("artists") or []) or f.artist
@@ -400,6 +459,7 @@ def note_track(con, t, sid, searched=True, alt=None, yt=None, sc=None):
         info.pop("soundcloud", None)
     # сбой прошлой попытки (follow.py) к новой отношения не имеет
     info.pop("fetch_error", None)
+    info.pop("fetch_note", None)
     con.execute("UPDATE release_tracks SET info=? WHERE id=?", (json.dumps(info, ensure_ascii=False), t["id"]))
 
 
@@ -615,6 +675,11 @@ def release(con, release_id, artist_name=None, retry=False, alt=False):
         con.execute("UPDATE releases SET status='new', note=? WHERE id=? AND status IN ('queued', 'failed')",
                     (note, release_id))
         return "в релизе нечего качать"
+    paused = youtube_paused()
+    if paused:
+        # до поиска в Spotify: его лимит на то, что сейчас не скачается, не тратим
+        note_youtube_paused(con, want)
+        raise YouTubePaused(paused)
     artist = artist_name or rel["deezer_name"] or rel["artist"] or ""
     try:
         songs, missing, other, youtube, cloud = find_songs(con, rel, rows, want, artist, alt)

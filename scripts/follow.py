@@ -21,7 +21,15 @@ auto_download. Остальное запоминается как известн
 высыпалась бы вся дискография. Недостающее из старого — это «Дискография».
 
 Скачивание, которому помешал YouTube или downtify, ночью повторяется само —
-не больше RETRY_MAX попыток на релиз. Если не ответил сам Spotify (нет
+не больше RETRY_MAX попыток на релиз; если мешала только блокировка YouTube
+(403, «не бот») или downtify потерял очередь при перезапуске — до
+RETRY_MAX_BLOCKED: сам релиз тут ни при чём. Причина сбоя записывается у
+дорожки сразу, как её видно в очереди downtify, — очередь живёт в его памяти.
+
+Пауза YouTube: YT_TRIP отказов за YT_WINDOW минут — на YT_PAUSE_HOURS
+закачки останавливаются: ждущее в очереди downtify убирается, новое туда не
+уходит (download.YouTubePaused), повтор ждёт конца паузы. 2026-11-20 смена
+клиентов давала пару часов, потом YouTube резал всё подряд. Если не ответил сам Spotify (нет
 Premium у владельца приложения, предохранитель), повтор ждёт, пока Spotify
 снова заработает, и такие попытки в RETRY_MAX не считаются: до поиска дело
 не дошло.
@@ -39,6 +47,7 @@ import json
 import os
 import re
 import sys
+import time
 from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -53,7 +62,13 @@ RESOLVE_PER_RUN = 40      # столько новых исполнителей �
 NEW_DAYS = 60             # релиз старше — не новинка, а поздно добавленный старый
 ARRIVE_HOURS = 6          # скачанное не доехало до фонотеки за столько — «не скачалось»
 RETRY_MAX = 3             # попыток скачать релиз, считая первую; дальше решать в пульте
+RETRY_MAX_BLOCKED = 8     # то же, если мешала только блокировка YouTube или потеря очереди downtify
+YT_TRIP = 10              # столько отказов YouTube за YT_WINDOW минут — пауза закачек
+YT_WINDOW = 30
+YT_PAUSE_HOURS = 6        # YouTube отпускает через несколько часов
 BOT = re.compile(r"not a bot|sign in to confirm(?! your age)", re.I)
+LOST = ("lost", "downtify потерял задачу (перезапускался?)")
+BLOCKED = {"youtube", "lost"}   # виды сбоя, в которых сам релиз не виноват
 AGE = re.compile(r"confirm your age|inappropriate for some users", re.I)
 VA = {"various artists", "various", "va", "сборник", "разные исполнители", "v a"}
 
@@ -350,13 +365,13 @@ def downtify_queue():
     """Что downtify знает о песнях: {id трека Spotify: (статус, сообщение)}.
 
     Очередь живёт в памяти downtify до его перезапуска; у повторённой песни
-    в ней несколько записей — берём последнюю. Не ответил — пусто.
+    в ней несколько записей — берём последнюю. Не ответил — None.
     """
     import requests
     try:
         q = requests.get(env.DOWNTIFY_URL + "/api/queue", timeout=30).json()
     except Exception:
-        return {}
+        return None
     out = {}
     for i in q if isinstance(q, list) else []:
         sid = (i.get("song") or {}).get("song_id")
@@ -367,6 +382,8 @@ def downtify_queue():
 
 def fetch_error(message):
     """Причина из сообщения downtify: (вид, текст для пульта)."""
+    if re.search(r"HTTP Error 403", message):
+        return "youtube", "YouTube временно режет закачки (403)"
     if BOT.search(message):
         return "youtube", "YouTube временно не отдаёт звук (просит подтвердить, что не бот)"
     if AGE.search(message):
@@ -376,11 +393,69 @@ def fetch_error(message):
 
 
 def attempts(con, release_id):
-    # попытка, на которой Spotify не ответил, до поиска не дошла — не в счёт
+    # попытка, на которой Spotify не ответил или стояла пауза YouTube, до
+    # downtify не дошла — не в счёт
     return con.execute("SELECT count(*) FROM actions WHERE kind='download' "
                        "AND json_extract(payload, '$.release_id')=? "
-                       "AND NOT (status='failed' AND result LIKE ?)",
-                       (release_id, "ошибка: %s%%" % download.SPOTIFY_DOWN)).fetchone()[0]
+                       "AND NOT (status='failed' AND (result LIKE ? OR result LIKE ?))",
+                       (release_id, "ошибка: %s%%" % download.SPOTIFY_DOWN,
+                        "ошибка: %s%%" % download.YOUTUBE_PAUSED)).fetchone()[0]
+
+
+def retry_limit(kinds):
+    """Сколько попыток дать релизу: блокировка YouTube и потеря очереди
+    downtify к самому релизу отношения не имеют — 2026-11-20 у альбомов Кино
+    все три попытки сгорели на одной волне 403."""
+    kinds = {k for k in kinds if k}
+    return RETRY_MAX_BLOCKED if kinds and kinds <= BLOCKED | {"spotify"} else RETRY_MAX
+
+
+def youtube_hits(n):
+    """Учесть n свежих отказов YouTube; набралось YT_TRIP за YT_WINDOW минут —
+    включить паузу закачек. Вернуть True, если пауза включилась сейчас."""
+    if not n or DRY:
+        return False
+    st = download.youtube_state()
+    now = time.time()
+    hits = [h for h in st.get("hits") or [] if now - h < YT_WINDOW * 60] + [now] * n
+    st["hits"] = hits[-200:]
+    tripped = False
+    if len(hits) >= YT_TRIP and now >= float(st.get("until") or 0):
+        st["until"] = now + YT_PAUSE_HOURS * 3600
+        st["why"] = "%d отказов YouTube за %d мин" % (len(hits), YT_WINDOW)
+        st["hits"] = []
+        tripped = True
+    download.youtube_save(st)
+    return tripped
+
+
+def drop_queued(con):
+    """Пауза включилась: убрать из очереди downtify то, что ещё не начало
+    качаться, — получит те же 403. У дорожек — вид сбоя «youtube», ночью
+    после паузы они уйдут снова. Вернуть число убранных."""
+    import requests
+    try:
+        q = requests.get(env.DOWNTIFY_URL + "/api/queue", timeout=30).json()
+    except Exception:
+        return 0
+    waiting = {(i.get("song") or {}).get("song_id") for i in q if isinstance(i, dict) and i.get("status") == "queued"}
+    waiting.discard(None)
+    n = 0
+    for t in con.execute("SELECT t.id, t.info FROM release_tracks t JOIN releases r ON r.id=t.release_id "
+                         "WHERE r.status='downloading'").fetchall():
+        info = jdb.loads(t["info"], {}) or {}
+        sid = info.get("spotify_id") or info.get("youtube_id")
+        if sid not in waiting:
+            continue
+        try:
+            requests.delete(env.DOWNTIFY_URL + "/api/queue/item", params={"song_id": sid}, timeout=30)
+        except Exception:
+            continue
+        info["fetch_error"] = "youtube"
+        info["fetch_note"] = "отложено: %s" % download.YOUTUBE_PAUSED
+        con.execute("UPDATE release_tracks SET info=? WHERE id=?", (json.dumps(info, ensure_ascii=False), t["id"]))
+        n += 1
+    return n
 
 
 def retry_failed(con):
@@ -395,13 +470,17 @@ def retry_failed(con):
     """
     n = 0
     paused = download.spotify_paused()
+    yt_paused = download.youtube_paused()
     for rel in con.execute("SELECT id, title FROM releases WHERE status='failed' ORDER BY id").fetchall():
         kinds = {(jdb.loads(t["info"], {}) or {}).get("fetch_error")
                  for t in con.execute("SELECT info FROM release_tracks WHERE release_id=?", (rel["id"],))}
-        if not kinds & {"youtube", "downtify", "spotify"} or attempts(con, rel["id"]) >= RETRY_MAX:
+        if not kinds & {"youtube", "downtify", "spotify", "lost"} or attempts(con, rel["id"]) >= retry_limit(kinds):
             continue
         if "spotify" in kinds and paused:
             print("   ~ Spotify на паузе (%s), подожду: %s" % (paused, rel["title"][:60]))
+            continue
+        if yt_paused:
+            print("   ~ YouTube на паузе (%s), подожду: %s" % (yt_paused, rel["title"][:60]))
             continue
         n += 1
         print("   ~ повторю: %s" % rel["title"][:60])
@@ -419,9 +498,10 @@ def recheck_downloads(con, lib):
     доехало за ARRIVE_HOURS. Доедет позже — всё равно станет «в фонотеке».
     Вернуть (в фонотеку, не скачалось).
     """
-    moved = failed = 0
+    moved = failed = yt_new = 0
     now = datetime.datetime.now()
-    queue = None
+    queue = False   # ещё не спрашивали; None — downtify не ответил
+    waiting = None  # названия файлов в incoming, читаются один раз
 
     def put(rel, status, note):
         if not DRY:
@@ -475,19 +555,38 @@ def recheck_downloads(con, lib):
             continue
         if rel["status"] != "downloading":
             continue
-        if queue is None:
+        if queue is False:
             queue = downtify_queue()
         broken = {}
         for t in rest:
             info = jdb.loads(t["info"], {}) or {}
-            st = queue.get(info.get("spotify_id") or info.get("youtube_id") or "")
+            st = (queue or {}).get(info.get("spotify_id") or info.get("youtube_id") or "")
             if st and st[0] == "error":
                 broken[t["id"]] = fetch_error(st[1])
+            elif info.get("fetch_note") and not (st and st[0] in ("queued", "downloading", "done")):
+                # ошибку видели раньше, а downtify с тех пор перезапускался
+                broken[t["id"]] = (info.get("fetch_error") or "downtify", info["fetch_note"])
+        yt_new += remember(con, rest, broken)
         lost = [t for t in rest if not_in_spotify(t)]
         late = [t for t in rest if t["id"] not in broken and not not_in_spotify(t) and t not in twin_other]
         since = parse_ts(rel["decided_at"])
         if late and since is not None and now - since < datetime.timedelta(hours=ARRIVE_HOURS):
             continue
+        if queue is not None:
+            # downtify ответил, но о дорожке не знает ничего: очередь живёт в
+            # памяти и пропала при перезапуске (2026-11-20 так пропали 77
+            # дорожек Кино). Это не «не доехало», а повод повторить
+            # скачанное, но ещё не разобранное сторожем (MusicBrainz тормозит
+            # импорт часами) — не потеря: файл лежит в incoming
+            if waiting is None:
+                waiting = incoming_titles()
+            for t in late:
+                info = jdb.loads(t["info"], {}) or {}
+                sid = info.get("spotify_id") or info.get("youtube_id")
+                if sid and not info.get("soundcloud") and sid not in queue and loose_key(t["title"]) not in waiting:
+                    broken[t["id"]] = LOST
+            late = [t for t in late if t["id"] not in broken]
+            remember(con, rest, broken)
         wrong = [t for t in twin_other if t["id"] not in broken]
         failed += 1
         parts = []
@@ -504,24 +603,74 @@ def recheck_downloads(con, lib):
             parts.append("YouTube дал другую версию, такая уже есть: " + titles(wrong))
         if late:
             parts.append("не доехало до фонотеки: " + titles(late))
-        if broken and attempts(con, rel["id"]) < RETRY_MAX:
+        if broken and attempts(con, rel["id"]) < retry_limit({why[0] for why in broken.values()}):
             parts.append("повторю ночью")
-        if not DRY:
-            # вид сбоя — у дорожки: по нему ночью решается, повторять ли
-            for t in rest:
-                if t["id"] in broken:
-                    info = jdb.loads(t["info"], {}) or {}
-                    info["fetch_error"] = broken[t["id"]][0]
-                    con.execute("UPDATE release_tracks SET info=? WHERE id=?",
-                                (json.dumps(info, ensure_ascii=False), t["id"]))
         put(rel, "failed", "; ".join(parts))
+    if youtube_hits(yt_new):
+        n = drop_queued(con)
+        print("   ! пауза закачек YouTube %s; убрано из очереди downtify: %d" % (download.youtube_paused(), n))
     return moved, failed
+
+
+def loose_key(title):
+    s = (title or "").lower().replace("ё", "е")
+    return re.sub(r"[\W_]+", "", s)
+
+
+def incoming_titles():
+    """Названия песен из файлов, ждущих разбора в incoming. downtify называет
+    их «Исполнитель - Альбом - Песня», SoundCloud — «Исполнитель - Песня»:
+    песня — последняя часть."""
+    out = set()
+    try:
+        names = os.listdir(env.INCOMING_DIR)
+    except OSError:
+        return out
+    for n in names:
+        base, ext = os.path.splitext(n)
+        if ext.lower() in env.AUDIO_EXT:
+            out.add(loose_key(base.split(" - ")[-1]))
+    return out
+
+
+def remember(con, rest, broken):
+    """Записать вид и текст сбоя у дорожки сразу, как он виден: очередь
+    downtify живёт в памяти, и после его перезапуска причина пропала бы, а
+    по виду сбоя ночью решается, повторять ли. Вернуть, сколько дорожек
+    впервые получили отказ YouTube, — для паузы закачек."""
+    n = 0
+    for t in rest:
+        why = broken.get(t["id"])
+        if not why:
+            continue
+        row = con.execute("SELECT info FROM release_tracks WHERE id=?", (t["id"],)).fetchone()
+        info = jdb.loads(row["info"] if row else None, {}) or {}
+        if info.get("fetch_error") == why[0] and info.get("fetch_note") == why[1]:
+            continue
+        if why[0] == "youtube":
+            n += 1
+        info["fetch_error"], info["fetch_note"] = why
+        if not DRY:
+            con.execute("UPDATE release_tracks SET info=? WHERE id=?", (json.dumps(info, ensure_ascii=False), t["id"]))
+    return n
+
+
+FLAGS = {"--dry", "--arrivals", "--watch", "--retry", "--catch-up"}
 
 
 def main():
     only = None
-    if "--artist" in sys.argv:
-        only = sys.argv[sys.argv.index("--artist") + 1]
+    args = sys.argv[1:]
+    if "--artist" in args:
+        i = args.index("--artist")
+        if i + 1 >= len(args):
+            sys.exit(__doc__)
+        only = args[i + 1]
+        args = args[:i] + args[i + 2:]
+    # незнакомый флаг — не полный проход: 2026-11-20 «--help» поставил в
+    # очередь новинку
+    if any(a not in FLAGS for a in args):
+        sys.exit(__doc__)
     con = jdb.connect()
     if "--arrivals" in sys.argv:
         # только отметить доехавшее: сторож зовёт это сразу после разбора
